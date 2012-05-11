@@ -245,9 +245,9 @@ static int bnx2_probe ( struct pci_device *pci ) {
 
 	misc_id = readl (bnx2->regs + BNX2_MISC_ID);
 	DBGC ( bnx2, "BCM%04X (rev %c%d) detected\n",
-				 ( misc_id & BNX2_MISC_ID_CHIP_NUM ) >> 16,
-				 ( ( misc_id & BNX2_MISC_ID_CHIP_REV ) >> 12 ) + 'A',
-				 ( misc_id & BNX2_MISC_ID_CHIP_METAL ) >> 4 );
+				 ( unsigned int ) ( misc_id & BNX2_MISC_ID_CHIP_NUM ) >> 16,
+				 ( int ) ( ( misc_id & BNX2_MISC_ID_CHIP_REV ) >> 12 ) + 'A',
+				 ( int ) ( misc_id & BNX2_MISC_ID_CHIP_METAL ) >> 4 );
 
 	/* Reset the NIC */
 	if ( ( rc = bnx2_reset ( bnx2 ) ) != 0 )
