@@ -158,7 +158,7 @@ static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
 	udelay ( 50 );
 	value = readl ( bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
 	if ( ( value & ( BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
-					BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) ) == 0 )
+					BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) ) != 0 )
 		return -EBUSY;
 
 	return 0;
