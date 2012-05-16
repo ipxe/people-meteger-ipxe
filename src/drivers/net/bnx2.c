@@ -56,10 +56,33 @@ FILE_LICENCE ( GPL2_OR_LATER );
 static int bnx2_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 	struct bnx2_nic *bnx2 =
 		container_of ( mii, struct bnx2_nic, mii );
+	uint32_t value;
+	int i;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support MII read\n", bnx2 );
-	( void ) reg;
-	return -ENOTSUP;
+	//Check to see if there's a pending transaction
+	value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
+	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
+		return -EBUSY;
+
+	value = ( bnx2->phy_addr << 21 ) | ( reg << 16 ) |
+			BNX2_EMAC_MDIO_COMM_COMMAND_READ |
+			BNX2_EMAC_MDIO_COMM_START_BUSY;
+	writel ( value, bnx2->regs + BNX2_EMAC_MDIO_COMM );
+	for ( i = 0; i < 50; i++ ) {
+		value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
+		if ( ! ( value & BNX2_EMAC_MDIO_COMM_START_BUSY ) ) {
+			udelay ( 5 );
+			value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
+			break;
+		}
+		udelay ( 10 );
+	}
+	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
+		value = -EBUSY;
+	else if ( value & BNX2_EMAC_MDIO_COMM_FAIL )
+		value = -EIO;
+
+	return value;
 }
 
 /**
@@ -74,11 +97,36 @@ static int bnx2_mii_write ( struct mii_interface *mii, unsigned int reg,
 				unsigned int data) {
 	struct bnx2_nic *bnx2 =
 		container_of ( mii, struct bnx2_nic, mii );
+	uint32_t value;
+	int i;
+	int rc;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support MII write\n", bnx2 );
-	( void ) reg;
-	( void ) data;
-	return -ENOTSUP;
+	//Check to see if there's a pending transaction
+	value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
+	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
+		return -EBUSY;
+
+	value = ( bnx2->phy_addr << 21 ) | ( reg << 16 ) | data |
+			BNX2_EMAC_MDIO_COMM_COMMAND_WRITE |
+			BNX2_EMAC_MDIO_COMM_START_BUSY;
+	writel ( value, bnx2->regs + BNX2_EMAC_MDIO_COMM );
+
+	for ( i = 0; i < 50; i++ ) {
+		value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
+		if ( ! ( value & BNX2_EMAC_MDIO_COMM_START_BUSY ) ) {
+				udelay ( 5 );
+				break;
+		}
+		udelay ( 10 );
+	}
+	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
+		rc = -EBUSY;
+	else if ( value & BNX2_EMAC_MDIO_COMM_FAIL )
+		rc = -EIO;
+	else
+		rc = 0;
+
+	return rc;
 }
 
 /** bnx2 MII operations */
@@ -101,9 +149,19 @@ static struct mii_operations bnx2_mii_operations = {
  * @ret rc		Return status code
  */
 static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
+	uint32_t value;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support reset\n", bnx2 );
-	return -ENOTSUP;
+	value = readl ( bnx2->regs + BNX2_MISC_ID );
+
+	value = BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ;
+	writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
+	udelay ( 50 );
+	value = readl ( bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
+	if ( ( value & ( BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
+					BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) ) == 0 )
+		return -EBUSY;
+
+	return 0;
 }
 
 /******************************************************************************
@@ -224,7 +282,7 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	struct bnx2_nic *bnx2;
 	int rc;
 	uint32_t misc_id;
-	
+
 	/* Allocate and initialise net device */
 	netdev = alloc_etherdev ( sizeof ( *bnx2 ) );
 	if ( ! netdev ) {
@@ -253,6 +311,7 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	if ( ( rc = bnx2_reset ( bnx2 ) ) != 0 )
 		goto err_reset;
 
+	bnx2->phy_addr = 1;
 	/* Initialise and reset MII interface */
 	mii_init ( &bnx2->mii, &bnx2_mii_operations );
 	if ( ( rc = mii_reset ( &bnx2->mii ) ) != 0 ) {
@@ -260,7 +319,6 @@ static int bnx2_probe ( struct pci_device *pci ) {
 		       bnx2, strerror ( rc ) );
 		goto err_mii_reset;
 	}
-
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
