@@ -17,7 +17,7 @@
  * 02110-1301, USA.
  */
 
-FILE_LICENCE(GPL2_OR_LATER);
+FILE_LICENCE ( GPL2_OR_LATER );
 
 #include <stdint.h>
 #include <string.h>
@@ -33,20 +33,7 @@ FILE_LICENCE(GPL2_OR_LATER);
 #include <ipxe/mii.h>
 #include "rhine.h"
 
-#define	RHINE_READB(_nic, _reg)		\
-    readb((_nic)->regs + (_reg))
-#define	RHINE_READW(_nic, _reg)		\
-    readw((_nic)->regs + (_reg))
-#define	RHINE_READL(_nic, _reg)		\
-    readl((_nic)->regs + (_reg))
-#define	RHINE_WRITEB(_nic, _reg, _val)	\
-    writeb((_val), (_nic)->regs + (_reg))
-#define	RHINE_WRITEW(_nic, _reg, _val)	\
-    writew((_val), (_nic)->regs + (_reg))
-#define	RHINE_WRITEL(_nic, _reg, _val)	\
-    writel((_val), (_nic)->regs + (_reg))
-#define	RHINE_SETBIT(_nic, _reg, _mask)	\
-    RHINE_WRITEB(_nic, _reg, RHINE_READB(_nic, _reg) | _mask)
+#define	rhine_setbit(_reg, _mask)	writeb ( readb ( _reg ) | _mask, _reg )
 
 /** @file
  *
@@ -68,23 +55,22 @@ FILE_LICENCE(GPL2_OR_LATER);
  * @v reg		Register address
  * @ret value		Data read, or negative error
  */
-static int rhine_mii_read(struct mii_interface *mii, unsigned int reg)
-{
-	struct rhine_nic *nic = container_of (mii, struct rhine_nic, mii);
-	int timeout = 10000;
+static int rhine_mii_read ( struct mii_interface *mii, unsigned int reg ) {
+	struct rhine_nic *rhn = container_of ( mii, struct rhine_nic, mii );
+	int timeout = RHINE_TIMEOUT_US;
 
-	DBGC(nic, "RHINE %p MII read reg %d\n", nic, reg);
+	DBGC ( rhn, "RHINE %p MII read reg %d\n", rhn, reg );
 	
-	RHINE_WRITEB(nic, RHINE_MII_PA, reg);
-	RHINE_SETBIT(nic, RHINE_MII_CR, RHINE_MII_CR_RDEN);
+	writeb ( reg, rhn->regs + RHINE_MII_PA );
+	rhine_setbit( rhn->regs + RHINE_MII_CR, RHINE_MII_CR_RDEN );
 
-	while (timeout--) {
-		udelay(1);
-		if ((RHINE_READB(nic, RHINE_MII_CR) & RHINE_MII_CR_RDEN) == 0)
-			return RHINE_READW(nic, RHINE_MII_RDWR);
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( (readb ( rhn->regs + RHINE_MII_CR ) & RHINE_MII_CR_RDEN ) == 0 )
+			return readw ( rhn->regs + RHINE_MII_RDWR );
 	}
 
-	DBGC(nic, "MII read timeout\n");
+	DBGC ( rhn, "MII read timeout\n" );
 	return -ETIMEDOUT;
 }
 
@@ -96,28 +82,28 @@ static int rhine_mii_read(struct mii_interface *mii, unsigned int reg)
  * @v data		Data to write
  * @ret rc		Return status code
  */
-static int rhine_mii_write(struct mii_interface *mii, unsigned int reg,
-    unsigned int data)
-{
-	struct rhine_nic *nic = container_of(mii, struct rhine_nic, mii);
-	int timeout = 10000;
+static int rhine_mii_write ( struct mii_interface *mii, unsigned int reg,
+    unsigned int data ) {
+	struct rhine_nic *rhn = container_of(mii, struct rhine_nic, mii);
+	int timeout = RHINE_TIMEOUT_US;
 
-	DBGC (nic, "RHINE %p MII write reg %d data 0x%04x\n", nic, reg, data );
+	DBGC ( rhn, "RHINE %p MII write reg %d data 0x%04x\n", rhn, reg, data );
 
-	RHINE_WRITEB(nic, RHINE_MII_PA, reg);
-	RHINE_WRITEW(nic, RHINE_MII_RDWR, data);
-	RHINE_SETBIT(nic, RHINE_MII_CR, RHINE_MII_CR_WREN);
+	writeb ( reg, rhn->regs + RHINE_MII_PA );
+	writew ( data, rhn->regs + RHINE_MII_RDWR );
+	rhine_setbit ( rhn->regs + RHINE_MII_CR, RHINE_MII_CR_WREN );
 
-	while (timeout--) {
-		if ((RHINE_READB(nic, RHINE_MII_CR) & RHINE_MII_CR_WREN) == 0)
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( rhn->regs + RHINE_MII_CR ) & RHINE_MII_CR_WREN ) == 0 )
 			return 0;
 	}
 
-	DBGC(nic, "MII write timeout\n");
+	DBGC ( rhn, "MII write timeout\n" );
 	return -ETIMEDOUT;
 }
 
-/** Skeleton MII operations */
+/** Rhine MII operations */
 static struct mii_operations rhine_mii_operations = {
 	.read = rhine_mii_read,
 	.write = rhine_mii_write,
@@ -133,28 +119,45 @@ static struct mii_operations rhine_mii_operations = {
 /**
  * Reset hardware
  *
- * @v nic		Skeleton device
+ * @v rhn		Rhine device
  * @ret rc		Return status code
  */
-static int rhine_reset(struct rhine_nic *nic)
-{
-	int timeout = 10000;
+static int rhine_reset ( struct rhine_nic *rhn ) {
+	int timeout = RHINE_TIMEOUT_US;
 
-	DBGC(nic, "RHINE %p reset\n", nic);
+	DBGC ( rhn, "RHINE %p reset\n", rhn );
 
-	RHINE_SETBIT(nic, RHINE_CR1, RHINE_CR1_RESET);
+	rhine_setbit ( rhn->regs + RHINE_CR1, RHINE_CR1_RESET );
 
-	while (timeout--) {
-		if ((RHINE_READB(nic, RHINE_CR1) & RHINE_CR1_RESET) == 0)
-			break;
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( rhn->regs + RHINE_CR1 ) & RHINE_CR1_RESET ) == 0 )
+			return 0;
+	}
+	
+	DBGC ( rhn, "RHINE %p reset timeout\n", rhn );
+	return -ETIMEDOUT;
+}
+
+/**
+ * Reload EEPROM contents
+ *
+ * @v rhn		Rhine device
+ */
+static int rhine_reload_eeprom ( struct rhine_nic *rhn ) {
+	int timeout = RHINE_TIMEOUT_US;
+
+	rhine_setbit( rhn->regs + RHINE_EEPROM_CTRL, RHINE_EEPROM_CTRL_RELOAD );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( rhn->regs + RHINE_EEPROM_CTRL )
+		    & RHINE_EEPROM_CTRL_RELOAD ) == 0 )
+			return 0;
 	}
 
-	if (timeout == 0) {
-		DBGC(nic, "RHINE %p reset timeout\n", nic);
-		return -ETIMEDOUT;
-	}
-
-	return 0;
+	DBGC ( rhn, "RHINE %p EEPROM reload timeout\n", rhn );
+	return -ETIMEDOUT;
 }
 
 /******************************************************************************
@@ -169,22 +172,21 @@ static int rhine_reset(struct rhine_nic *nic)
  *
  * @v netdev		Network device
  */
-static void rhine_check_link(struct net_device *netdev)
-{
-	struct rhine_nic *nic = netdev->priv;
+static void rhine_check_link ( struct net_device *netdev ) {
+	struct rhine_nic *rhn = netdev->priv;
 
-	DBGC(nic, "RHINE %p check link: %02x\n", nic, RHINE_READB(nic, RHINE_MII_SR));
+	DBGC ( rhn, "RHINE %p check link\n", rhn );
 
-	if (RHINE_READB(nic, RHINE_MII_SR) & RHINE_MII_SR_LINKNWAY) {
-		DBGC(nic, "RHINE %p link down\n", nic);
-		netdev_link_down(netdev);
+	if ( readb ( rhn->regs + RHINE_MII_SR ) & RHINE_MII_SR_LINKNWAY ) {
+		DBGC ( rhn, "RHINE %p link down\n", rhn );
+		netdev_link_down ( netdev );
 	} else {
-		DBGC(nic, "RHINE %p link up\n", nic);
-		netdev_link_up(netdev);
+		DBGC ( rhn, "RHINE %p link up\n", rhn );
+		netdev_link_up ( netdev );
 	}
 
-	if (RHINE_READB(nic, RHINE_MII_SR) & RHINE_MII_SR_PHYERR)
-		netdev_link_err(netdev, -EINVAL);
+	if ( readb ( rhn->regs + RHINE_MII_SR ) & RHINE_MII_SR_PHYERR )
+		netdev_link_err ( netdev, -EINVAL );
 }
 
 /******************************************************************************
@@ -200,11 +202,10 @@ static void rhine_check_link(struct net_device *netdev)
  * @v netdev		Network device
  * @ret rc		Return status code
  */
-static int rhine_open(struct net_device *netdev)
-{
-	struct rhine_nic *nic = netdev->priv;
+static int rhine_open ( struct net_device *netdev ) {
+	struct rhine_nic *rhn = netdev->priv;
 
-	DBGC ( nic, "RHINE %p does not yet support open\n", nic );
+	DBGC ( rhn, "RHINE %p does not yet support open\n", rhn );
 	return -ENOTSUP;
 }
 
@@ -213,11 +214,10 @@ static int rhine_open(struct net_device *netdev)
  *
  * @v netdev		Network device
  */
-static void rhine_close(struct net_device *netdev)
-{
-	struct rhine_nic *nic = netdev->priv;
+static void rhine_close ( struct net_device *netdev ) {
+	struct rhine_nic *rhn = netdev->priv;
 
-	DBGC(nic, "RHINE %p does not yet support close\n", nic);
+	DBGC ( rhn, "RHINE %p does not yet support close\n", rhn );
 }
 
 /**
@@ -227,11 +227,10 @@ static void rhine_close(struct net_device *netdev)
  * @v iobuf		I/O buffer
  * @ret rc		Return status code
  */
-static int rhine_transmit(struct net_device *netdev, struct io_buffer *iobuf)
-{
-	struct rhine_nic *nic = netdev->priv;
+static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
+	struct rhine_nic *rhn = netdev->priv;
 
-	DBGC(nic, "RHINE %p does not yet support transmit\n", nic);
+	DBGC ( rhn, "RHINE %p does not yet support transmit\n", rhn);
 	( void ) iobuf;
 	return -ENOTSUP;
 }
@@ -241,14 +240,13 @@ static int rhine_transmit(struct net_device *netdev, struct io_buffer *iobuf)
  *
  * @v netdev		Network device
  */
-static void rhine_poll(struct net_device *netdev)
-{
-	struct rhine_nic *nic = netdev->priv;
+static void rhine_poll ( struct net_device *netdev ) {
+	struct rhine_nic *rhn = netdev->priv;
 
-	rhine_check_link(netdev);
+	rhine_check_link ( netdev );
 
 	/* Not yet implemented */
-	( void ) nic;
+	( void ) rhn;
 }
 
 /**
@@ -257,15 +255,14 @@ static void rhine_poll(struct net_device *netdev)
  * @v netdev		Network device
  * @v enable		Interrupts should be enabled
  */
-static void rhine_irq(struct net_device *netdev, int enable)
-{
+static void rhine_irq ( struct net_device *netdev, int enable ) {
 	struct rhine_nic *nic = netdev->priv;
 
 	DBGC ( nic, "RHINE %p does not yet support interrupts\n", nic );
 	( void ) enable;
 }
 
-/** Skeleton network device operations */
+/** Rhine network device operations */
 static struct net_device_operations rhine_operations = {
 	.open		= rhine_open,
 	.close		= rhine_close,
@@ -287,85 +284,72 @@ static struct net_device_operations rhine_operations = {
  * @v pci		PCI device
  * @ret rc		Return status code
  */
-static int rhine_probe(struct pci_device *pci)
-{
+static int rhine_probe ( struct pci_device *pci ) {
 	struct net_device *netdev;
-	struct rhine_nic *nic;
+	struct rhine_nic *rhn;
 	int rc;
-	int timeout = 10000;
 
 	/* Allocate and initialise net device */
-	netdev = alloc_etherdev(sizeof(*nic));
-	if (!netdev) {
+	netdev = alloc_etherdev ( sizeof ( *rhn ) );
+	if ( ! netdev ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
 
-	netdev_init (netdev, &rhine_operations);
-	nic = netdev->priv;
-	pci_set_drvdata (pci, netdev);
+	netdev_init ( netdev, &rhine_operations );
+	rhn = netdev->priv;
+	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
-	memset(nic, 0, sizeof(*nic));
+	memset ( rhn, 0, sizeof ( *rhn ) );
 
 	/* Fix up PCI device */
-	adjust_pci_device(pci);
+	adjust_pci_device ( pci );
 
 	/* Map registers */
-	nic->regs = ioremap(pci->membase, RHINE_BAR_SIZE);
+	rhn->regs = ioremap ( pci->membase, RHINE_BAR_SIZE );
 
 	/* Reset the NIC */
-	if ((rc = rhine_reset(nic)) != 0)
+	if ( ( rc = rhine_reset ( rhn ) ) != 0 )
 		goto err_reset;
 
 	/* Reload EEPROM */
-	RHINE_SETBIT(nic, RHINE_EEPROM_CTRL, RHINE_EEPROM_CTRL_RELOAD);
-
-	while (timeout--) {
-		udelay(1);
-		if ((RHINE_READB(nic, RHINE_EEPROM_CTRL)
-		    & RHINE_EEPROM_CTRL_RELOAD) == 0)
-			break;
-	}
-
-	if (timeout == 0) {
-		rc = -ETIMEDOUT;
+	if ( ( rc = rhine_reload_eeprom ( rhn ) ) != 0 )
 		goto err_reset;
-	}
 
-	netdev->hw_addr[0] = RHINE_READB(nic, RHINE_MAC0);
-	netdev->hw_addr[1] = RHINE_READB(nic, RHINE_MAC1);
-	netdev->hw_addr[2] = RHINE_READB(nic, RHINE_MAC2);
-	netdev->hw_addr[3] = RHINE_READB(nic, RHINE_MAC3);
-	netdev->hw_addr[4] = RHINE_READB(nic, RHINE_MAC4);
-	netdev->hw_addr[5] = RHINE_READB(nic, RHINE_MAC5);
+	netdev->hw_addr[0] = readb ( rhn->regs + RHINE_MAC0 );
+	netdev->hw_addr[1] = readb ( rhn->regs + RHINE_MAC1 );
+	netdev->hw_addr[2] = readb ( rhn->regs + RHINE_MAC2 );
+	netdev->hw_addr[3] = readb ( rhn->regs + RHINE_MAC3 );
+	netdev->hw_addr[4] = readb ( rhn->regs + RHINE_MAC4 );
+	netdev->hw_addr[5] = readb ( rhn->regs + RHINE_MAC5 );
 
 	/* Initialise and reset MII interface */
-	mii_init(&nic->mii, &rhine_mii_operations);
-	if ((rc = mii_reset(&nic->mii)) != 0) {
-		DBGC (nic, "RHINE %p could not reset MII: %s\n",
-		       nic, strerror(rc));
+	mii_init ( &rhn->mii, &rhine_mii_operations );
+	if ( ( rc = mii_reset ( &rhn->mii ) ) != 0 ) {
+		DBGC ( rhn, "RHINE %p could not reset MII: %s\n",
+		       rhn, strerror ( rc ) );
 		goto err_mii_reset;
 	}
 
-	DBGC(nic, "RHINE PHY vendor id: %04x\n", rhine_mii_read(&nic->mii, 0x02));
-	DBGC(nic, "RHINE PHY device id: %04x\n", rhine_mii_read(&nic->mii, 0x03));
+	DBGC ( rhn, "RHINE PHY vendor id: %04x\n", rhine_mii_read ( &rhn->mii, 0x02 ) );
+	DBGC ( rhn, "RHINE PHY device id: %04x\n", rhine_mii_read ( &rhn->mii, 0x03 ) );
 
 	/* Register network device */
-	if ((rc = register_netdev(netdev)) != 0)
+	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
 
 	/* Set initial link state */
-	rhine_check_link(netdev);
+	rhine_check_link ( netdev );
 
 	return 0;
 
-	unregister_netdev(netdev);
+	unregister_netdev( netdev );
  err_register_netdev:
  err_mii_reset:
-	rhine_reset(nic);
+	rhine_reset ( rhn );
  err_reset:
-	netdev_nullify(netdev);
-	netdev_put(netdev);
+	netdev_nullify ( netdev );
+	netdev_put ( netdev );
  err_alloc:
 	return rc;
 }
@@ -375,28 +359,27 @@ static int rhine_probe(struct pci_device *pci)
  *
  * @v pci		PCI device
  */
-static void rhine_remove(struct pci_device *pci)
-{
-	struct net_device *netdev = pci_get_drvdata(pci);
+static void rhine_remove ( struct pci_device *pci ) {
+	struct net_device *netdev = pci_get_drvdata ( pci );
 	struct rhine_nic *nic = netdev->priv;
 
 	/* Unregister network device */
-	unregister_netdev(netdev);
+	unregister_netdev ( netdev );
 
 	/* Reset card */
-	rhine_reset(nic);
+	rhine_reset ( nic );
 
 	/* Free network device */
-	netdev_nullify(netdev);
-	netdev_put(netdev);
+	netdev_nullify ( netdev );
+	netdev_put ( netdev );
 }
 
-/** Skeleton PCI device IDs */
+/** Rhine PCI device IDs */
 static struct pci_device_id rhine_nics[] = {
 	PCI_ROM ( 0x1106, 0x3106, "vt6105m",	"VIA VT6105M", 0 ),
 };
 
-/** Skeleton PCI driver */
+/** Rhine PCI driver */
 struct pci_driver rhine_driver __pci_driver = {
 	.ids = rhine_nics,
 	.id_count = ( sizeof ( rhine_nics ) / sizeof ( rhine_nics[0] ) ),
