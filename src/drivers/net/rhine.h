@@ -23,6 +23,34 @@ struct rhine_descriptor {
 	uint32_t	next;
 };
 
+#define	RHINE_TDES0_OWN		(1 << 31)
+#define RHINE_TDES1_IC		(1 << 23)
+#define	RHINE_TDES1_EDP		(1 << 22)
+#define	RHINE_TDES1_STP		(1 << 21)
+#define	RHINE_TDES1_TCPCK	(1 << 20)
+#define	RHINE_TDES1_UDPCK	(1 << 19)
+#define	RHINE_TDES1_IPCK	(1 << 18)
+#define	RHINE_TDES1_TAG		(1 << 17)
+#define	RHINE_TDES1_CRC		(1 << 16)
+#define	RHINE_TDES1_CHAIN	(1 << 15)
+#define	RHINE_TDES1_SIZE(_x)	((_x) & 0x7ff)
+#define	RHINE_RDES1_SIZE(_x)	((_x) & 0x7ff)
+#define	RHINE_RDES1_CHAIN	(1 << 15)
+#define	RHINE_RDES1_INTR	(1 << 23)
+
+#define	RHINE_RING_ALIGN	4
+
+/** Rhine descriptor rings sizes */
+#define	RHINE_RXDESC_NUM	8
+#define	RHINE_RXDESC_SIZE	\
+    ( RHINE_RXDESC_NUM * sizeof ( struct rhine_descriptor ) )
+
+#define	RHINE_TXDESC_NUM	8
+#define	RHINE_TXDESC_SIZE	\
+    ( RHINE_TXDESC_NUM * sizeof ( struct rhine_descriptor ) )
+
+#define	RHINE_RX_MAX_LEN	2048
+
 /** Rhine MAC address registers */
 #define	RHINE_MAC0		0x00
 #define	RHINE_MAC1		0x01
@@ -47,6 +75,8 @@ struct rhine_descriptor {
 
 /** Command 0 register */
 #define	RHINE_CR0		0x08
+#define	RHINE_CR0_RXSTART	(1 << 6)
+#define	RHINE_CR0_TXSTART	(1 << 5)
 #define	RHINE_CR0_TXEN		(1 << 4)	/*< Transmit enable */
 #define	RHINE_CR0_RXEN		(1 << 3)	/*< Receive enable */
 #define	RHINE_CR0_STOPNIC	(1 << 2)	/*< Stop NIC */
@@ -66,9 +96,25 @@ struct rhine_descriptor {
 
 /** Interrupt service 0 */
 #define	RHINE_ISR0		0x0c
+#define	RHINE_ISR0_MIBOVFL	(1 << 7)
+#define	RHINE_ISR0_PCIERR	(1 << 6)
+#define	RHINE_ISR0_RXRINGERR	(1 << 5)
+#define	RHINE_ISR0_TXRINGERR	(1 << 4)
+#define	RHINE_ISR0_TXERR	(1 << 3)
+#define	RHINE_ISR0_RXERR	(1 << 2)
+#define	RHINE_ISR0_TXDONE	(1 << 1)
+#define	RHINE_ISR0_RXDONE	(1 << 0)
 
 /** Interrupt service 1 */
 #define	RHINE_ISR1		0x0d
+#define	RHINE_ISR1_GPI		(1 << 7)
+#define	RHINE_ISR1_PORTSTATE	(1 << 6)
+#define	RHINE_ISR1_TXABORT	(1 << 5)
+#define	RHINE_ISR1_RDRUNNING	(1 << 4)
+#define	RHINE_ISR1_RXFIFOOVFL	(1 << 3)
+#define	RHINE_ISR1_RXFIFOUNFL	(1 << 2)
+#define	RHINE_ISR1_TXFIFOUNFL	(1 << 1)
+#define	RHINE_ISR1_EARLYRX	(1 << 0)
 
 /** Interrupt enable mask 0 */
 #define	RHINE_IMR0		0x0e
@@ -80,7 +126,7 @@ struct rhine_descriptor {
 #define	RHINE_RXQUEUE_BASE	0x18
 
 /** TX queue 0 descriptor base address */
-#define	RHINE_TXQUEUE_BASE	0x38
+#define	RHINE_TXQUEUE_BASE	0x1c
 
 /** MII configuration */
 #define	RHINE_MII_CFG		0x6c
@@ -137,6 +183,17 @@ struct rhine_nic {
 	void *regs;
 	/** MII interface */
 	struct mii_interface mii;
+	/** Netdev */
+	struct net_device *netdev;
+
+	struct rhine_descriptor *rx_ring;
+	struct io_buffer *rx_buffs[RHINE_TXDESC_NUM];
+	int rx_prod;
+	int rx_cons;
+
+	struct rhine_descriptor *tx_ring;
+	int tx_prod;
+	int tx_cons;
 };
 
 #endif /* _RHINE_H */
