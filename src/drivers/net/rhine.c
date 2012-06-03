@@ -175,7 +175,7 @@ static int rhine_reload_eeprom ( struct rhine_nic *rhn ) {
 static void rhine_check_link ( struct net_device *netdev ) {
 	struct rhine_nic *rhn = netdev->priv;
 
-	If ( readb ( rhn->regs + RHINE_MII_SR ) & RHINE_MII_SR_LINKNWAY )
+	if ( readb ( rhn->regs + RHINE_MII_SR ) & RHINE_MII_SR_LINKNWAY )
 		netdev_link_down ( netdev );
 	else
 		netdev_link_up ( netdev );
@@ -196,9 +196,12 @@ static int rhine_alloc_rings ( struct rhine_nic *rhn )
 	int i;
 
 	/* Allocate RX descriptor ring */
-	rhn->rx_ring = malloc_dma ( RHINE_RXDESC_SIZE, RHINE_RING_ALIGN );
 	rhn->rx_prod = 0;
 	rhn->rx_cons = 0;
+	rhn->rx_ring = malloc_dma ( RHINE_RXDESC_SIZE, RHINE_RING_ALIGN );
+	if ( ! rhn->rx_ring )
+		return -ENOMEM;
+
 	memset ( rhn->rx_ring, 0, RHINE_RXDESC_SIZE );
 
 	for ( i = 0; i < RHINE_RXDESC_NUM; i++ )
@@ -214,6 +217,9 @@ static int rhine_alloc_rings ( struct rhine_nic *rhn )
 	rhn->tx_prod = 0;
 	rhn->tx_cons = 0;
 	rhn->tx_ring = malloc_dma ( RHINE_TXDESC_SIZE, RHINE_RING_ALIGN );
+	if ( ! rhn->tx_ring )
+		return -ENOMEM;
+
 	memset ( rhn->tx_ring, 0, RHINE_TXDESC_SIZE );
 
 	for ( i = 0; i < RHINE_TXDESC_NUM; i++ )
@@ -232,28 +238,29 @@ static int rhine_refill_rx ( struct rhine_nic *rhn )
 {
 	struct rhine_descriptor *desc;
 	struct io_buffer *iobuf;
-	int i = 0;
+	int rx_idx, i = 0;
 
 	while ( ( rhn->rx_prod - rhn->rx_cons ) < RHINE_RXDESC_NUM ) {
 		iobuf = alloc_iob ( RHINE_RX_MAX_LEN );
 		if ( ! iobuf )
 			return 0;
 
-		desc = &rhn->rx_ring[rhn->rx_prod];
+		rx_idx = ( rhn->rx_prod++ % RHINE_RXDESC_NUM );
+		desc = &rhn->rx_ring[rx_idx];
 		desc->buffer = virt_to_bus ( iobuf-> data );
 		desc->des0 = RHINE_TDES0_OWN;
 		desc->des1 = RHINE_RDES1_SIZE ( RHINE_RX_MAX_LEN - 1 )
 		    | RHINE_RDES1_CHAIN | RHINE_RDES1_INTR;
 
-		rhn->rx_buffs[rhn->rx_prod] = iobuf;
-		rhn->rx_prod = ( ( rhn->rx_prod + 1 ) % RHINE_RXDESC_NUM );
+		rhn->rx_buffs[rx_idx] = iobuf;
 		i++;
 
-		DBGC ( rhn, "RHINE %p refilled prod=%d cons=%d\n", rhn,
-		    rhn->rx_prod, rhn->rx_cons );
+		//DBGC ( rhn, "RHINE %p refilled idx=%d\n", rhn,
+		//    rx_idx );
 	}
 
-	DBGC ( rhn, "RHINE %p refilled %d RX descriptors\n", rhn, i );
+	if (i > 0)
+		DBGC ( rhn, "RHINE %p refilled %d RX descriptors\n", rhn, i );
 	return 0;
 }
 
@@ -299,11 +306,18 @@ static void rhine_close ( struct net_device *netdev ) {
 
 	DBGC ( rhn, "RHINE %p close\n", rhn );
 
+	/* Destroy RX ring */
+	/* XXX */
+
+	/* Discard receive buffers */
 	for ( i = 0 ; i < RHINE_RXDESC_NUM ; i++ ) {
 		if ( rhn->rx_buffs[i] )
 			free_iob ( rhn->rx_buffs[i] );
 		rhn->rx_buffs[i] = NULL;
 	}
+
+	/* Destroy TX ring */
+	/* XXX */
 }
 
 /**
@@ -316,18 +330,21 @@ static void rhine_close ( struct net_device *netdev ) {
 static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	struct rhine_nic *rhn = netdev->priv;
 	struct rhine_descriptor *desc;
+	int tx_idx;
 
 	DBGC ( rhn, "RHINE %p transmit\n", rhn);
 
-	desc = &rhn->tx_ring[rhn->tx_prod];
+	iob_pad ( iobuf, ETH_ZLEN );
+
+	tx_idx = ( rhn->tx_prod++ % RHINE_TXDESC_NUM );
+	desc = &rhn->tx_ring[tx_idx];
 	desc->buffer = virt_to_bus ( iobuf->data );
 	desc->des0 = RHINE_TDES0_OWN;
 	desc->des1 = RHINE_TDES1_IC | RHINE_TDES1_STP | RHINE_TDES1_EDP
 	    | RHINE_TDES1_CHAIN | RHINE_TDES1_SIZE ( iob_len ( iobuf ) );
-	rhn->tx_prod = ( ( rhn->tx_prod + 1 ) % RHINE_TXDESC_NUM );
 	
-	DBGC ( rhn, "RHINE %p tx_prod=%d desc=%p iobuf=%p\n", rhn,
-	    rhn->tx_prod, desc, iobuf->data );
+	DBGC ( rhn, "RHINE %p tx_prod=%d desc=%p iobuf=%p len=%d ethertype=%02x\n", rhn,
+	    tx_idx, desc, iobuf->data, iob_len ( iobuf ), *((unsigned short *)iobuf->data + 6) );
 
 	rhine_setbit ( rhn->regs + RHINE_CR1, RHINE_CR1_TXPOLL );
 	return 0;
@@ -336,38 +353,43 @@ static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf )
 static void rhine_poll_rx ( struct rhine_nic *rhn ) {
 	struct rhine_descriptor *desc;
 	struct io_buffer *iobuf;
+	int rx_idx;
 	
 	while ( rhn->rx_cons != rhn->rx_prod ) {
-		desc = &rhn->rx_ring[rhn->rx_cons];
+		rx_idx = ( rhn->rx_cons % RHINE_RXDESC_NUM );
+		desc = &rhn->rx_ring[rx_idx];
 
 		if (desc->des0 & RHINE_TDES0_OWN)
 			return;
 
-		iobuf = rhn->rx_buffs[rhn->rx_cons];
-		iob_put ( iobuf, ( ( desc->des0 >> 16 ) & 0x7ff) );
+		DBGC ( rhn, "RHINE %p got packet on idx=%d (prod=%d) ethertype=%02x\n",
+		    rhn, rx_idx, rhn->rx_prod % RHINE_RXDESC_NUM, *((unsigned short *)rhn->rx_buffs[rx_idx]->data + 6) );
+
+		iobuf = rhn->rx_buffs[rx_idx];
+		iob_put ( iobuf, ( ( desc->des0 >> 16 ) & 0x7ff) );	/* XXX */
 
 		netdev_rx ( rhn->netdev, iobuf );
 
-		DBGC ( rhn, "RHINE %p got packet on idx=%d (prod=%d)\n",
-		    rhn, rhn->rx_cons, rhn->rx_prod );
-		rhn->rx_cons = ( ( rhn->rx_cons + 1 ) % RHINE_RXDESC_NUM );
+		rhn->rx_cons++;
 	}
 }
 
 static void rhine_poll_tx ( struct rhine_nic *rhn ) {
 	struct rhine_descriptor *desc;
+	int tx_idx;
 
 	while ( rhn->tx_cons != rhn->tx_prod ) {
-		desc = &rhn->tx_ring[rhn->rx_cons];
+		tx_idx = ( rhn->tx_cons % RHINE_TXDESC_NUM );
+		desc = &rhn->tx_ring[tx_idx];
 		
 		if ( desc->des0 & RHINE_TDES0_OWN )
 			return;
 
 		netdev_tx_complete_next ( rhn->netdev );
-		rhn->tx_cons = ( ( rhn->tx_cons + 1 ) % RHINE_TXDESC_NUM );
 	
 		DBGC ( rhn, "RHINE %p poll_tx cons=%d prod=%d tsr=%04x\n",
-		    rhn, rhn->tx_cons, rhn->tx_prod, desc->des0 & 0xffff );
+		    rhn, tx_idx, rhn->tx_prod % RHINE_TXDESC_NUM, desc->des0 & 0xffff );
+		rhn->tx_cons++;
 	}
 
 }
@@ -405,7 +427,7 @@ static void rhine_poll ( struct net_device *netdev ) {
 		DBGC ( rhn, "RHINE %p RXRINGERR\n", rhn );
 
 	rhine_refill_rx ( rhn );
-
+	( void )isr1;
 }
 
 /**

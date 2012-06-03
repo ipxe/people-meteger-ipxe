@@ -23,20 +23,20 @@ struct rhine_descriptor {
 	uint32_t	next;
 };
 
-#define	RHINE_TDES0_OWN		(1 << 31)
-#define RHINE_TDES1_IC		(1 << 23)
-#define	RHINE_TDES1_EDP		(1 << 22)
-#define	RHINE_TDES1_STP		(1 << 21)
-#define	RHINE_TDES1_TCPCK	(1 << 20)
-#define	RHINE_TDES1_UDPCK	(1 << 19)
-#define	RHINE_TDES1_IPCK	(1 << 18)
-#define	RHINE_TDES1_TAG		(1 << 17)
-#define	RHINE_TDES1_CRC		(1 << 16)
-#define	RHINE_TDES1_CHAIN	(1 << 15)
-#define	RHINE_TDES1_SIZE(_x)	((_x) & 0x7ff)
-#define	RHINE_RDES1_SIZE(_x)	((_x) & 0x7ff)
-#define	RHINE_RDES1_CHAIN	(1 << 15)
-#define	RHINE_RDES1_INTR	(1 << 23)
+#define	RHINE_TDES0_OWN		(1 << 31)	/*< Owned descriptor */
+#define RHINE_TDES1_IC		(1 << 23)	/*< Generate interrupt */
+#define	RHINE_TDES1_EDP		(1 << 22)	/*< End of packet */
+#define	RHINE_TDES1_STP		(1 << 21)	/*< Start of packet */
+#define	RHINE_TDES1_TCPCK	(1 << 20)	/*< HW TCP checksum */
+#define	RHINE_TDES1_UDPCK	(1 << 19)	/*< HW UDP checksum */
+#define	RHINE_TDES1_IPCK	(1 << 18)	/*< HW IP checksum */
+#define	RHINE_TDES1_TAG		(1 << 17)	/*< Tagged frame */
+#define	RHINE_TDES1_CRC		(1 << 16)	/*< No CRC */
+#define	RHINE_TDES1_CHAIN	(1 << 15)	/*< Chained descriptor */
+#define	RHINE_TDES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
+#define	RHINE_RDES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
+#define	RHINE_RDES1_CHAIN	(1 << 15)	/*< Chained descriptor */
+#define	RHINE_RDES1_INTR	(1 << 23)	/*< Generate interrupt */
 
 #define	RHINE_RING_ALIGN	4
 
