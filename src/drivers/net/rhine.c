@@ -277,6 +277,9 @@ static int rhine_open ( struct net_device *netdev ) {
 	DBGC ( rhn, "RHINE %p open\n", rhn );
 	DBGC ( rhn, "RHINE %p regs at: %p\n", rhn, rhn->regs );
 
+	if ( ( rc = rhine_reset ( rhn ) ) != 0 )
+		return rc;
+
 	if ( ( rc = rhine_alloc_rings ( rhn ) ) != 0 )
 		return rc;
 
@@ -306,8 +309,14 @@ static void rhine_close ( struct net_device *netdev ) {
 
 	DBGC ( rhn, "RHINE %p close\n", rhn );
 
+	/* Clear RX ring address */
+	writel ( 0, rhn->regs + RHINE_RXQUEUE_BASE );
+
 	/* Destroy RX ring */
-	/* XXX */
+	free_dma ( rhn->rx_ring, RHINE_RXDESC_SIZE );
+	rhn->rx_ring = NULL;
+	rhn->rx_prod = 0;
+	rhn->rx_cons = 0;
 
 	/* Discard receive buffers */
 	for ( i = 0 ; i < RHINE_RXDESC_NUM ; i++ ) {
@@ -316,8 +325,14 @@ static void rhine_close ( struct net_device *netdev ) {
 		rhn->rx_buffs[i] = NULL;
 	}
 
+	/* Clear TX ring address */
+	writel ( 0, rhn->regs + RHINE_TXQUEUE_BASE );
+
 	/* Destroy TX ring */
-	/* XXX */
+	free_dma ( rhn->tx_ring, RHINE_TXDESC_SIZE );
+	rhn->tx_ring = NULL;
+	rhn->tx_prod = 0;
+	rhn->tx_cons = 0;
 }
 
 /**
@@ -408,7 +423,7 @@ static void rhine_poll ( struct net_device *netdev ) {
 	isr1 = readb ( rhn->regs + RHINE_ISR1 );
 
 #if 0
-	DBGC ( rhn, "RHINE %p ISR0=%02x ISR1=%02x\n", rhn, isr0, isr1 );
+	hBGC ( rhn, "RHINE %p ISR0=%02x ISR1=%02x\n", rhn, isr0, isr1 );
 #endif
 
 	writeb ( 0, rhn->regs + RHINE_ISR0 );
