@@ -23,8 +23,8 @@ struct rhine_descriptor {
 	uint32_t	next;
 };
 
-#define	RHINE_TDES0_OWN		(1 << 31)	/*< Owned descriptor */
-#define RHINE_TDES1_IC		(1 << 23)	/*< Generate interrupt */
+#define	RHINE_DES0_OWN		(1 << 31)	/*< Owned descriptor */
+#define RHINE_DES1_IC		(1 << 23)	/*< Generate interrupt */
 #define	RHINE_TDES1_EDP		(1 << 22)	/*< End of packet */
 #define	RHINE_TDES1_STP		(1 << 21)	/*< Start of packet */
 #define	RHINE_TDES1_TCPCK	(1 << 20)	/*< HW TCP checksum */
@@ -32,11 +32,9 @@ struct rhine_descriptor {
 #define	RHINE_TDES1_IPCK	(1 << 18)	/*< HW IP checksum */
 #define	RHINE_TDES1_TAG		(1 << 17)	/*< Tagged frame */
 #define	RHINE_TDES1_CRC		(1 << 16)	/*< No CRC */
-#define	RHINE_TDES1_CHAIN	(1 << 15)	/*< Chained descriptor */
-#define	RHINE_TDES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
-#define	RHINE_RDES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
-#define	RHINE_RDES1_CHAIN	(1 << 15)	/*< Chained descriptor */
-#define	RHINE_RDES1_INTR	(1 << 23)	/*< Generate interrupt */
+#define	RHINE_DES1_CHAIN	(1 << 15)	/*< Chained descriptor */
+#define	RHINE_DES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
+#define	RHINE_DES0_GETSIZE(_x)	(((_x) >> 16) & 0x7ff)
 
 #define	RHINE_RING_ALIGN	4
 
@@ -188,12 +186,12 @@ struct rhine_nic {
 
 	struct rhine_descriptor *rx_ring;
 	struct io_buffer *rx_buffs[RHINE_TXDESC_NUM];
-	int rx_prod;
-	int rx_cons;
+	unsigned int rx_prod;
+	unsigned int rx_cons;
 
 	struct rhine_descriptor *tx_ring;
-	int tx_prod;
-	int tx_cons;
+	unsigned int tx_prod;
+	unsigned int tx_cons;
 };
 
 #endif /* _RHINE_H */
