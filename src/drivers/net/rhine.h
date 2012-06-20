@@ -180,6 +180,9 @@ struct rhine_descriptor {
 
 /** MII port address */
 #define	RHINE_MII_PA		0x71
+#define	RHINE_MII_PA_IDLE	(1 << 7)
+#define	RHINE_MII_PA_STATUS	(1 << 6)
+#define	RHINE_MII_PA_MDONE	(1 << 5)
 
 /** MII read/write data */
 #define	RHINE_MII_RDWR		0x72
