@@ -36,6 +36,32 @@ struct rhine_descriptor {
 #define	RHINE_DES1_SIZE(_x)	((_x) & 0x7ff)	/*< Frame size */
 #define	RHINE_DES0_GETSIZE(_x)	(((_x) >> 16) & 0x7ff)
 
+#define	RHINE_RDES0_RXOK	(1 << 15)
+#define	RHINE_RDES0_VIDHIT	(1 << 14)
+#define	RHINE_RDES0_MAR		(1 << 13)
+#define	RHINE_RDES0_BAR		(1 << 12)
+#define	RHINE_RDES0_PHY		(1 << 11)
+#define	RHINE_RDES0_CHN		(1 << 10)
+#define	RHINE_RDES0_STP		(1 << 9)
+#define	RHINE_RDES0_EDP		(1 << 8)
+#define	RHINE_RDES0_BUFF	(1 << 7)
+#define	RHINE_RDES0_FRAG	(1 << 6)
+#define	RHINE_RDES0_RUNT	(1 << 5)
+#define	RHINE_RDES0_LONG	(1 << 4)
+#define	RHINE_RDES0_FOV		(1 << 3)
+#define	RHINE_RDES0_FAE		(1 << 2)
+#define	RHINE_RDES0_CRCE	(1 << 1)
+#define	RHINE_RDES0_RERR	(1 << 0)
+
+#define	RHINE_TDES0_TERR	(1 << 15)
+#define	RHINE_TDES0_UDF		(1 << 11)
+#define	RHINE_TDES0_CRS		(1 << 10)
+#define	RHINE_TDES0_OWC		(1 << 9)
+#define	RHINE_TDES0_ABT		(1 << 8)
+#define	RHINE_TDES0_CDH		(1 << 7)
+#define	RHINE_TDES0_COLS	(1 << 4)
+#define	RHINE_TDES0_NCR(_x)	((_x) & 0xf)
+
 #define	RHINE_RING_ALIGN	4
 
 /** Rhine descriptor rings sizes */
