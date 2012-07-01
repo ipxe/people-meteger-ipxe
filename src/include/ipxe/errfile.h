@@ -147,7 +147,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_intel		     ( ERRFILE_DRIVER | 0x00650000 )
 #define ERRFILE_myson		     ( ERRFILE_DRIVER | 0x00660000 )
 #define	ERRFILE_rhine		     ( ERRFILE_DRIVER | 0x00670000 )
-
+#define	ERRFILE_velocity	     ( ERRFILE_DRIVER | 0x00680000 )
 #define ERRFILE_scsi		     ( ERRFILE_DRIVER | 0x00700000 )
 #define ERRFILE_arbel		     ( ERRFILE_DRIVER | 0x00710000 )
 #define ERRFILE_hermon		     ( ERRFILE_DRIVER | 0x00720000 )
