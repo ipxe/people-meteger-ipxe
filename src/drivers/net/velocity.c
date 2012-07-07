@@ -48,6 +48,44 @@ FILE_LICENCE ( GPL2_OR_LATER );
  ******************************************************************************
  */
 
+static int velocity_autopoll_stop ( struct velocity_nic *vlc )
+{
+	int timeout = VELOCITY_TIMEOUT_US;
+
+	/* Disable MII auto polling */
+	writeb ( 0, vlc->regs + VELOCITY_MIICR );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( readb ( vlc->regs + VELOCITY_MIISR ) & 
+		    VELOCITY_MIISR_IDLE )
+			return 0;	
+	}
+
+
+	DBGC ( vlc, "MII autopoll stop timeout\n" );
+	return -ETIMEDOUT;
+}
+
+static int velocity_autopoll_start ( struct velocity_nic *vlc )
+{
+	int timeout = VELOCITY_TIMEOUT_US;
+
+	/* Disable MII auto polling */
+	writeb ( VELOCITY_MIICR_MAUTO, vlc->regs + VELOCITY_MIICR );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( vlc->regs + VELOCITY_MIISR ) & 
+		    VELOCITY_MIISR_IDLE ) == 0 )
+			return 0;	
+	}
+
+
+	DBGC ( vlc, "MII autopoll start timeout\n" );
+	return -ETIMEDOUT;
+}
+
 /**
  * Read from MII register
  *
@@ -58,10 +96,28 @@ FILE_LICENCE ( GPL2_OR_LATER );
 static int velocity_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 	struct velocity_nic *vlc =
 		container_of ( mii, struct velocity_nic, mii );
+	int timeout = VELOCITY_TIMEOUT_US;
+	int result;
 
-	DBGC ( vlc, "VELOCITY %p does not yet support MII read\n", vlc );
-	( void ) reg;
-	return -ENOTSUP;
+	DBGC2 ( vlc, "VELOCITY %p MII read reg %d\n", vlc, reg );
+	
+	velocity_autopoll_stop ( vlc );
+
+	writeb ( reg, vlc->regs + VELOCITY_MIIADDR );
+	velocity_setbit( vlc->regs + VELOCITY_MIICR, VELOCITY_MIICR_RCMD );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( vlc->regs + VELOCITY_MIICR ) &
+		    VELOCITY_MIICR_RCMD ) == 0 ) {
+			result = readw ( vlc->regs + VELOCITY_MIIDATA );
+			velocity_autopoll_start ( vlc );
+			return result;
+		}	
+	}
+
+	DBGC ( vlc, "MII read timeout\n" );
+	return -ETIMEDOUT;
 }
 
 /**
@@ -76,11 +132,29 @@ static int velocity_mii_write ( struct mii_interface *mii, unsigned int reg,
 				unsigned int data) {
 	struct velocity_nic *vlc =
 		container_of ( mii, struct velocity_nic, mii );
+	int timeout = VELOCITY_TIMEOUT_US;
 
-	DBGC ( vlc, "VELOCITY %p does not yet support MII write\n", vlc );
-	( void ) reg;
-	( void ) data;
-	return -ENOTSUP;
+	DBGC2 ( vlc, "VELOCITY %p MII write reg %d data 0x%04x\n", vlc, reg, data );
+
+	DBGC2 ( vlc, "VELOCITY %p regs at 0x%p\n", vlc, vlc->regs );
+
+	velocity_autopoll_stop ( vlc );
+
+	writeb ( reg, vlc->regs + VELOCITY_MIIADDR );
+	writew ( data, vlc->regs + VELOCITY_MIIDATA );
+	velocity_setbit ( vlc->regs + VELOCITY_MIICR, VELOCITY_MIICR_WCMD );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( vlc->regs + VELOCITY_MIICR ) 
+		    & VELOCITY_MIICR_WCMD ) == 0 ) {
+			velocity_autopoll_start ( vlc );
+			return 0;
+		}
+	}
+
+	DBGC ( vlc, "MII write timeout\n" );
+	return -ETIMEDOUT;
 }
 
 /** Velocity MII operations */
@@ -97,6 +171,27 @@ static struct mii_operations velocity_mii_operations = {
  */
 
 /**
+ * reload eeprom contents
+ *
+ * @v vlc		Velocity device
+ */
+static int velocity_reload_eeprom ( struct velocity_nic *vlc ) {
+	int timeout = VELOCITY_TIMEOUT_US;
+
+	velocity_setbit( vlc->regs + VELOCITY_EECSR, VELOCITY_EECSR_RELOAD );
+
+	while ( timeout-- ) {
+		udelay ( 1 );
+		if ( ( readb ( vlc->regs + VELOCITY_EECSR )
+		    & VELOCITY_EECSR_RELOAD ) == 0 )
+			return 0;
+	}
+
+	DBGC ( vlc, "VELOCITY %p EEPROM reload timeout\n", vlc );
+	return -ETIMEDOUT;
+}
+
+/*
  * Reset hardware
  *
  * @v vlc		Velocity device
@@ -133,8 +228,10 @@ static int velocity_reset ( struct velocity_nic *vlc ) {
 static void velocity_check_link ( struct net_device *netdev ) {
 	struct velocity_nic *vlc = netdev->priv;
 
-	DBGC ( vlc, "VELOCITY %p does not yet support link state\n", vlc );
-	netdev_link_err ( netdev, -ENOTSUP );
+	if ( readb ( vlc->regs + VELOCITY_PHYSTS0 ) & VELOCITY_PHYSTS0_LINK )
+		netdev_link_up ( netdev );
+	else
+		netdev_link_down ( netdev );
 }
 
 /******************************************************************************
@@ -258,6 +355,17 @@ static int velocity_probe ( struct pci_device *pci ) {
 	if ( ( rc = velocity_reset ( vlc ) ) != 0 )
 		goto err_reset;
 
+	/* Reload EEPROM */
+	if ( ( rc = velocity_reload_eeprom ( vlc ) ) != 0 )
+		goto err_reset;
+
+	netdev->hw_addr[0] = readb ( vlc->regs + VELOCITY_MAC0 );
+	netdev->hw_addr[1] = readb ( vlc->regs + VELOCITY_MAC1 );
+	netdev->hw_addr[2] = readb ( vlc->regs + VELOCITY_MAC2 );
+	netdev->hw_addr[3] = readb ( vlc->regs + VELOCITY_MAC3 );
+	netdev->hw_addr[4] = readb ( vlc->regs + VELOCITY_MAC4 );
+	netdev->hw_addr[5] = readb ( vlc->regs + VELOCITY_MAC5 );
+
 	/* Initialise and reset MII interface */
 	mii_init ( &vlc->mii, &velocity_mii_operations );
 	if ( ( rc = mii_reset ( &vlc->mii ) ) != 0 ) {
@@ -308,7 +416,7 @@ static void velocity_remove ( struct pci_device *pci ) {
 
 /** Velocity PCI device IDs */
 static struct pci_device_id velocity_nics[] = {
-	PCI_ROM ( 0x5ce1, 0x5ce1, "vlc",	"Velocity", 0 ),
+	PCI_ROM ( 0x1106, 0x3119, "vt6122",	"VIA Velocity", 0 ),
 };
 
 /** Velocity PCI driver */

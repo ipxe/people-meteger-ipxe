@@ -175,7 +175,9 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define VELOCITY_CAMCTL			0x69    /* CAM control register */
 #define VELOCITY_MIICFG			0x6C    /* MII port config register */
 #define VELOCITY_MIISR			0x6D    /* MII port status register */
+#define	VELOCITY_MIISR_IDLE		(1 << 7)
 #define VELOCITY_PHYSTS0		0x6E    /* PHY status register */
+#define	VELOCITY_PHYSTS0_LINK		(1 << 6)
 #define VELOCITY_PHYSTS1		0x6F    /* PHY status register */
 #define VELOCITY_MIICR			0x70    /* MII command register */
 #define VELOCITY_MIICR_MAUTO		(1 << 7)
@@ -199,6 +201,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define VELOCITY_EEWRDAT		0x8C    /* EEPROM embedded write */
 #define VELOCITY_EECSUM			0x92    /* EEPROM checksum */
 #define VELOCITY_EECSR			0x93    /* EEPROM control/status */
+#define	VELOCITY_EECSR_RELOAD		(1 << 5)
 #define VELOCITY_EERDDAT		0x94    /* EEPROM embedded read */
 #define VELOCITY_EEADDR			0x96    /* EEPROM address */
 #define VELOCITY_EECMD			0x97    /* EEPROM embedded command */

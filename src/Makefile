@@ -96,6 +96,7 @@ SRCDIRS		+= config
 NON_AUTO_SRCS	:=
 NON_AUTO_SRCS	+= drivers/net/prism2.c
 NON_AUTO_SRCS	+= drivers/net/via-rhine.c
+NON_AUTO_SRCS	+= drivers/net/via-velocity.c
 
 # INCDIRS lists the include path
 #
