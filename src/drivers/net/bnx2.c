@@ -32,13 +32,491 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/pci.h>
 #include <ipxe/mii.h>
 #include "bnx2.h"
+#include "bnx2_fw.h"
 
 /** @file
  *
  * bnx2 network driver
  *
  */
+static uint32_t bnx2_reg_read_indirect ( struct bnx2_nic *bnx2,
+										 uint32_t offset ) {
+	uint32_t value;
+	pci_write_config_dword ( bnx2->pci,
+							 BNX2_PCICFG_REG_WINDOW_ADDRESS,
+							 offset );
+	pci_read_config_dword ( bnx2->pci, BNX2_PCICFG_REG_WINDOW, &value );
+	return value;
+}
 
+static void bnx2_reg_write_indirect ( struct bnx2_nic *bnx2,
+									  uint32_t offset,
+									  uint32_t value ) {
+	pci_write_config_dword ( bnx2->pci,
+							 BNX2_PCICFG_REG_WINDOW_ADDRESS,
+							 offset );
+	pci_write_config_dword ( bnx2->pci, BNX2_PCICFG_REG_WINDOW, value );
+}
+
+static void bnx2_shmem_init ( struct bnx2_nic *bnx2 ) {
+	uint32_t value;
+	value = bnx2_reg_read_indirect ( bnx2, BNX2_SHM_HDR_SIGNATURE );
+	if ( ( value & BNX2_SHM_HDR_SIGNATURE_SIG_MASK ) == BNX2_SHM_HDR_SIGNATURE_SIG )
+		bnx2->shmem = bnx2_reg_read_indirect ( bnx2, BNX2_SHM_HDR_ADDR_0 );
+	else
+		bnx2->shmem = BNX2_HOST_VIEW_SHMEM_BASE;
+}
+
+static uint32_t bnx2_shmem_read ( struct bnx2_nic *bnx2, uint32_t offset ) {
+	return bnx2_reg_read_indirect ( bnx2, bnx2->shmem + offset );
+}
+
+static void bnx2_shmem_write ( struct bnx2_nic *bnx2, uint32_t offset,
+							   uint32_t value ) {
+	bnx2_reg_write_indirect ( bnx2, bnx2->shmem + offset, value );
+}
+
+static void bnx2_set_mac_address ( struct bnx2_nic *bnx2,
+								   struct net_device *netdev ) {
+	uint32_t value;
+	value = bnx2_shmem_read ( bnx2, BNX2_PORT_HW_CFG_MAC_UPPER );
+	netdev->hw_addr[0] = ( uint8_t ) ( value >> 8 );
+	netdev->hw_addr[1] = ( uint8_t ) value;
+	value = bnx2_shmem_read ( bnx2, BNX2_PORT_HW_CFG_MAC_LOWER );
+	netdev->hw_addr[2] = ( uint8_t ) ( value >> 24 );
+	netdev->hw_addr[3] = ( uint8_t ) ( value >> 16 );
+	netdev->hw_addr[4] = ( uint8_t ) ( value >> 8 );
+	netdev->hw_addr[5] = ( uint8_t ) value;
+
+	/* We use the lower 3 bytes as the back-off seed */
+	value = netdev->hw_addr[5] + netdev->hw_addr[4] + netdev->hw_addr[3];
+	value |= BNX2_EMAC_BACKOFF_SEED_EMAC_BACKOFF_SEED;
+	writel ( value, bnx2->regs + BNX2_EMAC_BACKOFF_SEED );
+}
+
+static int bnx2_alloc_mem ( struct bnx2_nic *bnx2 ) {
+	bnx2->status_blk = malloc_dma ( sizeof ( struct status_block ),
+									sizeof ( struct status_block ) );
+	bnx2->tx_ring.tx_desc_ring = malloc_dma ( sizeof ( struct tx_bd ),
+											  sizeof ( struct tx_bd ) );
+	if ( !bnx2->status_blk || !bnx2->tx_ring.tx_desc_ring ) {
+		/* These are zeroed earlier so this is safe */
+		free_dma ( bnx2->status_blk, sizeof ( struct status_block ) );
+		free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct tx_bd ) );
+		return -ENOMEM;
+	}
+	memset ( bnx2->status_blk, 0, sizeof ( struct status_block ) );
+	memset ( bnx2->tx_ring.tx_desc_ring, 0, sizeof ( struct tx_bd ) );
+	return 0;
+}
+
+static void bnx2_free_mem ( struct bnx2_nic *bnx2 ) {
+	free_dma ( bnx2->status_blk, sizeof ( struct status_block ) );
+	bnx2->status_blk = NULL;
+	free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct tx_bd ) );
+	bnx2->tx_ring.tx_desc_ring = NULL;
+}
+
+static int bnx2_fw_sync ( struct bnx2_nic *bnx2, uint32_t message_data ) {
+	int i;
+	uint32_t value;
+
+	bnx2->fw_write_sequence++;
+	message_data |= bnx2->fw_write_sequence;
+	bnx2_shmem_write ( bnx2, BNX2_DRV_MB, message_data );
+
+	/* Wait for acknowledgement */
+	for ( i = 0; i < BNX2_FW_ACK_TIMEOUT_MS; i++ ) {
+		value = bnx2_shmem_read ( bnx2, BNX2_FW_MB );
+		if ( ( value & BNX2_FW_MSG_ACK ) == ( message_data & BNX2_DRV_MSG_SEQ ) )
+			break;
+
+		mdelay ( 1 );
+	}
+	if ( ( value & BNX2_FW_MSG_ACK ) != ( message_data & BNX2_DRV_MSG_SEQ ) &&
+		 ( value & BNX2_DRV_MSG_DATA ) != BNX2_DRV_MSG_DATA_WAIT0 ) {
+		message_data &= ~BNX2_DRV_MSG_CODE;
+		message_data |= BNX2_DRV_MSG_CODE_FW_TIMEOUT;
+
+		bnx2_shmem_write ( bnx2, BNX2_DRV_MB, message_data );
+		return -EBUSY;
+	}
+	if ( ( value & BNX2_FW_MSG_STATUS_MASK ) != BNX2_FW_MSG_STATUS_OK )
+		return -EIO;
+
+	return 0;
+}
+
+static void bnx2_context_write ( struct bnx2_nic *bnx2,
+								  uint32_t cid_addr,
+								  uint32_t offset,
+								  uint32_t value ) {
+	offset += cid_addr;
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		int i;
+		writel ( value, bnx2->regs + BNX2_CTX_CTX_DATA );
+		writel ( offset | BNX2_CTX_CTRL_WRITE_REQ, BNX2_CTX_CTRL );
+		for ( i = 0; i < 5; i++ ) {
+			value = readl ( bnx2->regs + BNX2_CTX_CTRL );
+			if ( ! ( value & BNX2_CTX_CTRL_WRITE_REQ ) )
+				break;
+
+			udelay ( 5 );
+		}
+	} else {
+		writel ( offset, bnx2->regs + BNX2_CTX_DATA_ADR );
+		writel ( value, bnx2->regs + BNX2_CTX_DATA );
+	}
+}
+
+static int bnx2_init_context_5709 ( struct bnx2_nic *bnx2 ) {
+	/* TODO! */
+	( void ) bnx2;
+	return 0;
+}
+
+static void bnx2_init_context ( struct bnx2_nic *bnx2 ) {
+	int i;
+	uint32_t vcid;
+	uint32_t vcid_addr;
+	uint32_t pcid_addr;
+	uint32_t offset;
+
+	/* Initialize the 96 Quick CIDs */
+	for ( vcid = 0; vcid <= 96; vcid++ ) {
+		if ( CHIP_ID ( bnx2->misc_id ) == CHIP_ID_5706_A0 ) {
+			uint32_t new_vcid;
+			vcid_addr = GET_PHY_CTX_ID_ADDR ( vcid );
+			if ( vcid & 0x8 )
+				new_vcid = 0x60 + ( vcid & 0xf0 ) + ( vcid & 0x7 );
+			else
+				new_vcid = vcid;
+
+			pcid_addr = GET_PHY_CTX_ID_ADDR ( new_vcid );
+		} else {
+			vcid_addr = GET_CTX_ID_ADDR ( vcid );
+			pcid_addr = vcid_addr;
+		}
+		for ( i = 0; i < ( CTX_SIZE / PHY_CTX_SIZE ); i++ ) {
+			vcid_addr += ( i << PHY_CTX_SHIFT );
+			pcid_addr = vcid_addr;
+			writel ( vcid_addr, bnx2->regs + BNX2_CTX_VIRT_ADDR );
+			writel ( pcid_addr, bnx2->regs + BNX2_CTX_PAGE_TBL );
+			for ( offset = 0; offset < PHY_CTX_SIZE; offset += 4 ) {
+				bnx2_context_write ( bnx2, vcid_addr, offset, 0 );
+			}
+		}
+
+	}
+}
+
+static uint32_t rv2p_fw_fixup ( int idx, uint32_t rv2p_code )
+{
+	switch (idx) {
+	case RV2P_P1_FIXUP_PAGE_SIZE_IDX:
+		rv2p_code &= ~RV2P_BD_PAGE_SIZE_MASK;
+		rv2p_code |= RV2P_BD_PAGE_SIZE;
+		break;
+	}
+	return rv2p_code;
+}
+
+static void bnx2_load_rv2p_proc ( struct bnx2_nic *bnx2,
+								  const uint32_t *fw,
+								  struct bnx2_rv2p_fw_file_entry *entry,
+								  int proc ) {
+	uint32_t length;
+	uint32_t offset;
+	uint32_t address;
+	uint32_t command;
+	uint32_t value;
+	uint32_t *code;
+	unsigned int i;
+
+	command = ( proc == RV2P_PROC1 ) ?
+			  BNX2_RV2P_PROC1_ADDR_CMD_RDWR :
+			  BNX2_RV2P_PROC2_ADDR_CMD_RDWR;
+	address = ( proc == RV2P_PROC1 ) ?
+			  BNX2_RV2P_PROC1_ADDR_CMD :
+			  BNX2_RV2P_PROC2_ADDR_CMD;
+	length = be32_to_cpu ( entry->rv2p.len );
+	offset = be32_to_cpu ( entry->rv2p.offset );
+	code = ( uint32_t * ) ( ( ( uint8_t * ) fw ) + offset );
+	for ( i = 0; i < length; i += 8 ) {
+		writel ( be32_to_cpu ( *code++ ), bnx2->regs + BNX2_RV2P_INSTR_HIGH );
+		writel ( be32_to_cpu ( *code++ ), bnx2->regs + BNX2_RV2P_INSTR_LOW );
+		value = ( i / 8 ) | command;
+		writel ( value, bnx2->regs + address );
+	}
+	code = ( uint32_t * ) ( ( ( uint8_t * ) fw ) + offset );
+	for ( i = 0; i < 8; i++ ) {
+		uint32_t location;
+		uint32_t c;
+		location = be32_to_cpu ( entry->fixup[i] );
+		if ( location && ( ( location * 4 ) < length ) ) {
+			c = be32_to_cpu ( * ( code + location - 1 ) );
+			writel ( c, bnx2->regs + BNX2_RV2P_INSTR_HIGH );
+			c = be32_to_cpu ( * ( code + location ) );
+			c = rv2p_fw_fixup ( i, c );
+			writel ( c, bnx2->regs + BNX2_RV2P_INSTR_LOW );
+			value = ( location / 2 ) | command;
+			writel ( value, bnx2->regs + address );
+		}
+	}
+	command = ( proc == RV2P_PROC1 ) ?
+				BNX2_RV2P_COMMAND_PROC1_RESET :
+				BNX2_RV2P_COMMAND_PROC2_RESET;
+	writel ( command, bnx2->regs + BNX2_RV2P_COMMAND );
+}
+
+static void bnx2_load_rv2p_firmware ( struct bnx2_nic *bnx2,
+									  const uint32_t *fw,
+									  struct bnx2_rv2p_fw_file *fw_file ) {
+	bnx2_load_rv2p_proc ( bnx2, fw, &fw_file->proc1, RV2P_PROC1 );
+	bnx2_load_rv2p_proc ( bnx2, fw, &fw_file->proc2, RV2P_PROC2 );
+}
+
+static void bnx2_load_mips_firmware_section ( struct bnx2_nic *bnx2,
+											  const struct cpu_reg *cpu,
+											  const uint32_t *fw,
+											  struct bnx2_fw_file_section *section ) {
+	uint32_t address, length, file_offset;
+	uint32_t offset;
+	uint32_t *data;
+	address = be32_to_cpu ( section->addr );
+	length = be32_to_cpu ( section->len );
+	file_offset = be32_to_cpu ( section->offset );
+	data = ( uint32_t * ) ( ( ( uint8_t * ) fw ) + file_offset );
+	offset = cpu->spad_base + ( address - BNX2_MIPS_VIEW_BASE );
+	if ( length ) {
+		unsigned int i;
+		for ( i = 0; i < length / 4; i++ ) {
+			bnx2_reg_write_indirect ( bnx2, offset, be32_to_cpu ( data[i] ) );
+			offset += 4;
+		}
+	}
+}
+
+static void bnx2_load_mips_firmware_entry ( struct bnx2_nic *bnx2,
+											const struct cpu_reg *cpu,
+											const uint32_t *fw,
+											struct bnx2_mips_fw_file_entry *entry ) {
+	/* We assume the CPU is already halted from the reset */
+	uint32_t value;
+	value = bnx2_reg_read_indirect ( bnx2, cpu->mode );
+	value |= BNX2_CPU_MODE_SOFT_HALT;
+	bnx2_reg_write_indirect ( bnx2, cpu->mode, value );
+	bnx2_reg_write_indirect ( bnx2, cpu->state, 0xffffff );
+	bnx2_load_mips_firmware_section ( bnx2, cpu, fw, &entry->text );
+	bnx2_load_mips_firmware_section ( bnx2, cpu, fw, &entry->data );
+	bnx2_load_mips_firmware_section ( bnx2, cpu, fw, &entry->rodata );
+	/* Clear pre-fetch instruction */
+	bnx2_reg_write_indirect ( bnx2, cpu->inst, 0 );
+	/* Set the program counter up */
+	value = be32_to_cpu ( entry->start_addr );
+	bnx2_reg_write_indirect ( bnx2, cpu->pc, value );
+	/* Unset halt bit */
+	value = bnx2_reg_read_indirect ( bnx2, cpu->mode );
+	value &= ~BNX2_CPU_MODE_SOFT_HALT;
+	/* Clear CPU states */
+	bnx2_reg_write_indirect ( bnx2, cpu->state, 0xffffff );
+	bnx2_reg_write_indirect ( bnx2, cpu->mode, value );
+}
+
+static void bnx2_load_mips_firmware ( struct bnx2_nic *bnx2,
+									  const uint32_t *fw,
+									  struct bnx2_mips_fw_file *fw_file ) {
+	bnx2_load_mips_firmware_entry ( bnx2, &cpu_reg_rxp, fw, &fw_file->rxp );
+	bnx2_load_mips_firmware_entry ( bnx2, &cpu_reg_txp, fw, &fw_file->txp );
+	bnx2_load_mips_firmware_entry ( bnx2, &cpu_reg_tpat, fw, &fw_file->tpat );
+	bnx2_load_mips_firmware_entry ( bnx2, &cpu_reg_com, fw, &fw_file->com );
+	bnx2_load_mips_firmware_entry ( bnx2, &cpu_reg_cp, fw, &fw_file->cp );
+}
+
+static void bnx2_load_firmware ( struct bnx2_nic *bnx2 ) {
+	const uint32_t *rv2p_firmware;
+	const uint32_t *mips_firmware;
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		if ( CHIP_ID ( bnx2->misc_id ) == CHIP_ID_5709_A0 ||
+			 CHIP_ID ( bnx2->misc_id ) == CHIP_ID_5709_A1 )
+			rv2p_firmware = bnx2_rv2p_09ax_firmware;
+		else
+			rv2p_firmware = bnx2_rv2p_09_firmware;
+
+		mips_firmware = bnx2_mips_09_firmware;
+	} else {
+		rv2p_firmware = bnx2_rv2p_06_firmware;
+		mips_firmware = bnx2_mips_06_firmware;
+	}
+	bnx2_load_rv2p_firmware ( bnx2, rv2p_firmware,
+								   ( struct bnx2_rv2p_fw_file * ) rv2p_firmware );
+	bnx2_load_mips_firmware ( bnx2, mips_firmware,
+								   ( struct bnx2_mips_fw_file * ) mips_firmware );
+}
+
+static int bnx2_reset_chip ( struct bnx2_nic *bnx2 ) {
+	uint32_t value;
+	int i;
+	int rc;
+
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		value = readl ( bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
+		value &= ~BNX2_MISC_NEW_CORE_CTL_DMA_ENABLE;
+		writel ( value, bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
+		value = readl ( bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
+
+		for ( i = 0; i < 100; i++ ) {
+			value = readl ( bnx2->regs + BNX2_PCICFG_DEVICE_STATUS );
+			if ( ! ( value & BNX2_PCICFG_DEVICE_STATUS_NO_PEND ) )
+				break;
+
+			mdelay ( 1 );
+		}
+	} else {
+		value = BNX2_MISC_ENABLE_CLR_BITS_DMA_ENGINE_ENABLE |
+				BNX2_MISC_ENABLE_CLR_BITS_TX_DMA_ENABLE |
+				BNX2_MISC_ENABLE_CLR_BITS_RX_DMA_ENABLE |
+				BNX2_MISC_ENABLE_CLR_BITS_HOST_COALESCE_ENABLE;
+		writel ( value, bnx2->regs + BNX2_MISC_ENABLE_CLR_BITS );
+		value = readl ( bnx2->regs + BNX2_MISC_ENABLE_CLR_BITS );
+		udelay ( 5 );
+	}
+	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT0 |
+									 BNX2_DRV_MSG_CODE_RESET ) ) )
+		return rc;
+
+	bnx2_shmem_write ( bnx2, BNX2_DRV_RESET_SIGNATURE,
+							 BNX2_DRV_RESET_SIGNATURE_MAGIC );
+	value = readl ( bnx2->regs + BNX2_MISC_ID );
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		writel ( BNX2_MISC_COMMAND_SW_RESET, bnx2->regs + BNX2_MISC_COMMAND );
+		readl ( bnx2->regs + BNX2_MISC_COMMAND );
+		udelay ( 5 );
+		value = BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
+				BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP;
+		writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
+	} else {
+		value = BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
+				BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
+				BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP;
+		writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
+		mdelay ( 20 );
+		value = readl ( bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
+		if ( value & ( BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
+					   BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) )
+			return -EBUSY;
+	}
+	value = readl ( bnx2->regs + BNX2_PCI_SWAP_DIAG0 );
+	if ( value != BNX2_PCI_SWAP_DIAG0_VALUE ) {
+		DBGC ( bnx2, "BNX2 %p byte swapping setup incorrectly", bnx2 );
+		return -ENOTSUP;
+	}
+	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT1 |
+									 BNX2_DRV_MSG_CODE_RESET ) ) )
+		return rc;
+
+	return 0;
+}
+
+static int bnx2_init_chip ( struct bnx2_nic *bnx2 ) {
+	uint32_t value;
+	int rc;
+
+	value = BNX2_DMA_CONFIG_DATA_BYTE_SWAP |
+			BNX2_DMA_CONFIG_DATA_WORD_SWAP |
+#if __BYTE_ORDER == __BIG_ENDIAN
+			BNX2_DMA_CONFIG_CNTL_BYTE_SWAP |
+#endif
+			BNX2_DMA_CONFIG_CNTL_WORD_SWAP |
+			BNX2_DMA_CONFIG_CNTL_PING_PONG_DMA |
+			( 2 << 20 ) |	/* PCI_CLK_CMP_BITS */
+			( 1 << 11 ) |	/* CNTL_PCI_COMP_DLY */
+			( 1 << 12 ) |	/* DMA read channels */
+			( 1 << 16 );	/* DMA write channels */
+	writel ( value, bnx2->regs + BNX2_DMA_CONFIG );
+
+	writel ( BNX2_MISC_ENABLE_SET_BITS_CONTEXT_ENABLE |
+			 BNX2_MISC_ENABLE_SET_BITS_HOST_COALESCE_ENABLE |
+			 BNX2_MISC_ENABLE_SET_BITS_RX_V2P_ENABLE,
+			 bnx2->regs + BNX2_MISC_ENABLE_SET_BITS );
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 )
+		bnx2_init_context_5709 ( bnx2 );
+	else
+		bnx2_init_context ( bnx2 );
+
+	bnx2_load_firmware ( bnx2 );
+	writel ( BNX2_EMAC_ATTENTION_ENA_LINK, bnx2->regs + BNX2_EMAC_ATTENTION_ENA );
+	writel ( ( uint64_t ) virt_to_phys ( bnx2->status_blk ) & 0xffffffff, bnx2->regs + BNX2_HC_STATUS_ADDR_L );
+	writel ( ( uint64_t ) virt_to_phys ( bnx2->status_blk ) >> 32, bnx2->regs + BNX2_HC_STATUS_ADDR_H );
+	writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_HC_ATTN_BITS_ENABLE );
+	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT2 | BNX2_DRV_MSG_CODE_RESET ) ) )
+		return rc;
+
+	writel ( BNX2_MISC_ENABLE_DEFAULT, bnx2->regs + BNX2_MISC_ENABLE_SET_BITS );
+	writel ( BNX2_HC_COMMAND_ENABLE | BNX2_HC_COMMAND_COAL_NOW_WO_INT, bnx2->regs + BNX2_HC_COMMAND );
+	readl ( bnx2->regs + BNX2_MISC_ENABLE_SET_BITS );
+	udelay ( 20 );
+	return 0;
+}
+
+static void bnx2_init_tx_context ( struct bnx2_nic *bnx2 ) {
+	uint32_t value;
+	uint32_t offset0, offset1, offset2, offset3;
+
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		offset0 = BNX2_L2CTX_TYPE_XI;
+		offset1 = BNX2_L2CTX_CMD_TYPE_XI;
+		offset2 = BNX2_L2CTX_TBDR_BHADDR_HI_XI;
+		offset3 = BNX2_L2CTX_TBDR_BHADDR_LO_XI;
+	} else {
+		offset0 = BNX2_L2CTX_TYPE;
+		offset1 = BNX2_L2CTX_CMD_TYPE;
+		offset2 = BNX2_L2CTX_TBDR_BHADDR_HI;
+		offset3 = BNX2_L2CTX_TBDR_BHADDR_LO;
+	}
+	value = BNX2_L2CTX_TYPE_TYPE_L2 | BNX2_L2CTX_TYPE_SIZE_L2;
+	bnx2_context_write ( bnx2, GET_CTX_ID_ADDR ( TX_CID ), offset0, value );
+
+	value = BNX2_L2CTX_CMD_TYPE_TYPE_L2 | ( 8 << 16 );
+	bnx2_context_write ( bnx2, GET_CTX_ID_ADDR ( TX_CID ), offset1, value );
+
+	value = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) >> 32;
+	bnx2_context_write ( bnx2, GET_CTX_ID_ADDR ( TX_CID ), offset2, value );
+
+	value = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) & 0xffffffff;
+	bnx2_context_write ( bnx2, GET_CTX_ID_ADDR ( TX_CID ), offset3, value );
+}
+
+static void bnx2_init_rings ( struct bnx2_nic *bnx2 ) {
+	struct tx_bd *txbd = bnx2->tx_ring.tx_desc_ring;
+
+	txbd->tx_bd_haddr_hi = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) >> 32;
+	txbd->tx_bd_haddr_lo = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) & 0xffffffff;
+	bnx2->tx_ring.tx_prod = 0;
+	bnx2->tx_ring.tx_prod_bseq = 0;
+	bnx2_init_tx_context ( bnx2 );
+}
+
+static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
+	int rc;
+	if ( ( rc = bnx2_reset_chip ( bnx2 ) ) != 0 )
+		return rc;
+
+	if ( ( rc = bnx2_init_chip ( bnx2 ) ) != 0 )
+		return rc;
+
+	bnx2_init_rings ( bnx2 );
+	return 0;
+}
+
+static int bnx2_init_nic ( struct bnx2_nic *bnx2 ) {
+	int rc;
+
+	if ( ( rc = bnx2_reset_nic ( bnx2 ) ) != 0 )
+		return rc;
+
+	return 0;
+}
 /******************************************************************************
  *
  * MII interface
@@ -59,7 +537,7 @@ static int bnx2_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 	uint32_t value;
 	int i;
 
-	//Check to see if there's a pending transaction
+	/* Check to see if there's a pending transaction */
 	value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
 	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
 		return -EBUSY;
@@ -101,7 +579,7 @@ static int bnx2_mii_write ( struct mii_interface *mii, unsigned int reg,
 	int i;
 	int rc;
 
-	//Check to see if there's a pending transaction
+	/* Check to see if there's a pending transaction */
 	value = readl ( bnx2->regs + BNX2_EMAC_MDIO_COMM );
 	if ( value & BNX2_EMAC_MDIO_COMM_START_BUSY )
 		return -EBUSY;
@@ -150,17 +628,19 @@ static struct mii_operations bnx2_mii_operations = {
  */
 static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
 	uint32_t value;
+	writel ( BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
+			 BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP,
+			 bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
 
-	value = readl ( bnx2->regs + BNX2_MISC_ID );
-
-	value = BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ;
-	writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
-	udelay ( 50 );
-	value = readl ( bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
-	if ( ( value & ( BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
-					BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) ) != 0 )
-		return -EBUSY;
-
+	bnx2->misc_id = readl ( bnx2->regs + BNX2_MISC_ID );
+	bnx2_shmem_init ( bnx2 );
+	value = bnx2_shmem_read ( bnx2, BNX2_DEV_INFO_SIGNATURE );
+	if ( ( value & BNX2_DEV_INFO_SIGNATURE_MAGIC_MASK ) !=
+		 BNX2_DEV_INFO_SIGNATURE_MAGIC ) {
+		DBGC ( bnx2, "BNX2 %p firmware is not running\n", bnx2 );
+		return -EIO;
+	}
+	bnx2->phy_addr = 1;
 	return 0;
 }
 
@@ -178,9 +658,7 @@ static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
  */
 static void bnx2_check_link ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-
-	DBGC ( bnx2, "bnx2 %p does not yet support link state\n", bnx2 );
-	netdev_link_err ( netdev, -ENOTSUP );
+	( void ) bnx2;
 }
 
 /******************************************************************************
@@ -198,9 +676,15 @@ static void bnx2_check_link ( struct net_device *netdev ) {
  */
 static int bnx2_open ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
+	int rc;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support open\n", bnx2 );
-	return -ENOTSUP;
+	if ( ( rc = bnx2_alloc_mem ( bnx2 ) ) )
+		return rc;
+
+	if ( ( rc = bnx2_init_nic ( bnx2 ) ) )
+		return rc;
+
+	return 0;
 }
 
 /**
@@ -210,8 +694,7 @@ static int bnx2_open ( struct net_device *netdev ) {
  */
 static void bnx2_close ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-
-	DBGC ( bnx2, "bnx2 %p does not yet support close\n", bnx2 );
+	bnx2_free_mem ( bnx2 );
 }
 
 /**
@@ -225,7 +708,7 @@ static int bnx2_transmit ( struct net_device *netdev,
 			       struct io_buffer *iobuf ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support transmit\n", bnx2 );
+	DBGC ( bnx2, "BNX2 %p does not yet support transmit\n", bnx2 );
 	( void ) iobuf;
 	return -ENOTSUP;
 }
@@ -251,7 +734,7 @@ static void bnx2_poll ( struct net_device *netdev ) {
 static void bnx2_irq ( struct net_device *netdev, int enable ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 
-	DBGC ( bnx2, "bnx2 %p does not yet support interrupts\n", bnx2 );
+	DBGC ( bnx2, "BNX2 %p does not yet support interrupts\n", bnx2 );
 	( void ) enable;
 }
 
@@ -281,7 +764,6 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	struct net_device *netdev;
 	struct bnx2_nic *bnx2;
 	int rc;
-	uint32_t misc_id;
 
 	/* Allocate and initialise net device */
 	netdev = alloc_etherdev ( sizeof ( *bnx2 ) );
@@ -294,28 +776,24 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( bnx2, 0, sizeof ( *bnx2 ) );
-
+	bnx2->netdev = netdev;
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
+	bnx2->pci = pci;
+
 	/* Map registers */
 	bnx2->regs = ioremap ( pci->membase, BNX2_BAR_SIZE );
-
-	misc_id = readl (bnx2->regs + BNX2_MISC_ID);
-	DBGC ( bnx2, "BCM%04X (rev %c%d) detected\n",
-				 ( unsigned int ) ( misc_id & BNX2_MISC_ID_CHIP_NUM ) >> 16,
-				 ( int ) ( ( misc_id & BNX2_MISC_ID_CHIP_REV ) >> 12 ) + 'A',
-				 ( int ) ( misc_id & BNX2_MISC_ID_CHIP_METAL ) >> 4 );
 
 	/* Reset the NIC */
 	if ( ( rc = bnx2_reset ( bnx2 ) ) != 0 )
 		goto err_reset;
 
-	bnx2->phy_addr = 1;
+	bnx2_set_mac_address ( bnx2, netdev );
 	/* Initialise and reset MII interface */
 	mii_init ( &bnx2->mii, &bnx2_mii_operations );
 	if ( ( rc = mii_reset ( &bnx2->mii ) ) != 0 ) {
-		DBGC ( bnx2, "bnx2 %p could not reset MII: %s\n",
+		DBGC ( bnx2, "BNX2 %p could not reset MII: %s\n",
 		       bnx2, strerror ( rc ) );
 		goto err_mii_reset;
 	}
