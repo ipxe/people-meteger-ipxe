@@ -20,7 +20,14 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define RV2P_PROC1										0
 #define RV2P_PROC2										1
 
+#define BNX2_RX_FILL									4
 
+#define L1_CACHE_BYTES									128
+#define L1_CACHE_ALIGN( X ) ( ( ( X ) + L1_CACHE_BYTES - 1 ) & ~ ( L1_CACHE_BYTES - 1 ) )
+
+#define BNX2_RX_OFFSET			( 16 + 2 )
+#define RX_BUF_USE_SIZE			( ETH_MAX_MTU + ETH_HLEN + BNX2_RX_OFFSET + 8 )
+#define RX_BUF_SIZE				( L1_CACHE_ALIGN ( RX_BUF_USE_SIZE + 8 ) )
 
 #define BNX2_PCICFG_REG_WINDOW_ADDRESS					0x00000078
 
@@ -154,6 +161,9 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_EMAC_BACKOFF_SEED							0x00001498
 #define BNX2_EMAC_BACKOFF_SEED_EMAC_BACKOFF_SEED		( 0x3ffL << 0 )
 
+#define BNX2_EMAC_RX_MODE								0x000014c8
+#define BNX2_EMAC_RX_MODE_SORT_MODE						( 1L << 12 )
+
 #define BNX2_PCICFG_INT_ACK_CMD							0x00000084
 #define BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID				( 1L << 16 )
 #define BNX2_PCICFG_INT_ACK_CMD_MASK_INT				( 1L << 18 )
@@ -220,6 +230,12 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #define BNX2_CTX_DATA_ADR								0x00001010
 
+#define BNX2_RV2P_CONFIG								0x00002808
+
+#define BNX2_L2CTX_CTX_TYPE								0x00000000
+#define BNX2_L2CTX_CTX_TYPE_CTX_BD_CHN_TYPE_VALUE		( 1 << 28 )
+#define BNX2_L2CTX_CTX_TYPE_SIZE_L2					( ( 0x20 / 20 ) <<16 )
+
 #define BNX2_L2CTX_TBDR_BHADDR_HI						0x000000a0
 #define BNX2_L2CTX_TBDR_BHADDR_LO						0x000000a4
 
@@ -241,6 +257,23 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_L2CTX_TX_HOST_BIDX							0x00000088
 #define BNX2_L2CTX_TX_HOST_BSEQ							0x00000090
 
+#define BNX2_L2CTX_NX_BDHADDR_HI						0x00000010
+#define BNX2_L2CTX_NX_BDHADDR_LO						0x00000014
+
+#define BNX2_L2CTX_HOST_BDIDX							0x00000004
+#define BNX2_L2CTX_HOST_BSEQ							0x00000008
+
+#define BNX2_RPM_SORT_USER0								0x00001820
+#define BNX2_EMAC_MULTICAST_HASH0						0x000014d0
+#define BNX2_RPM_SORT_USER0_BC_EN						( 1L << 16 )
+#define BNX2_RPM_SORT_USER0_MC_EN						( 1L << 17 )
+#define BNX2_RPM_SORT_USER0_ENA							( 1L << 31 )
+#define NUM_MC_HASH_REGISTERS							8
+
+#define BNX2_EMAC_MAC_MATCH0							0x00001410
+#define BNX2_EMAC_MAC_MATCH1							0x00001414
+
+#define RX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_rx_bd ) )
 #define TX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_tx_bd ) )
 #define MAX_TX_DESC_CNT		( TX_DESC_CNT - 1 )
 
@@ -254,7 +287,13 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define MB_GET_CID_ADDR(_cid)	( 0x10000 + ( ( _cid ) << MB_KERNEL_CTX_SHIFT ) )
 
 #define TX_CID											16
+#define RX_CID		0
+
+#define TX_CID_ADDR							GET_CTX_ID_ADDR ( TX_CID )
+#define RX_CID_ADDR							GET_CTX_ID_ADDR ( RX_CID )
+
 #define MB_TX_CID_ADDR						MB_GET_CID_ADDR(TX_CID)
+#define MB_RX_CID_ADDR						MB_GET_CID_ADDR(RX_CID)
 
 struct status_block {
 	uint32_t status_attn_bits;
@@ -346,20 +385,40 @@ struct status_block {
 };
 
 struct bnx2_tx_bd {
-	uint64_t haddr;
-	uint16_t reserved;
+	uint32_t haddr_hi;
+	uint32_t haddr_lo;
 	uint16_t nbytes;
-	uint16_t vlan_tag;
+	uint16_t reserved;
 	uint16_t flags;
+	uint16_t vlan_tag;
 	#define TX_BD_FLAGS_END			( 1 << 6 )
 	#define TX_BD_FLAGS_START		( 1 << 7 )
 } __attribute__ (( packed ));
 
 struct bnx2_tx_ring_info {
-	uint32_t tx_prod_bseq;
-	uint16_t tx_prod;
-	uint16_t tx_cons;
-	struct bnx2_tx_bd *tx_desc_ring;
+	uint32_t prod_bseq;
+	uint16_t prod;
+	uint16_t cons;
+	struct bnx2_tx_bd *desc;
+};
+
+struct bnx2_rx_bd {
+	uint32_t haddr_hi;
+	uint32_t haddr_lo;
+	uint32_t len;
+	uint16_t flags;
+	uint16_t reserved;
+	#define RX_BD_FLAGS_NOPUSH		( 1 << 0 )
+	#define RX_BD_FLAGS_DUMMY		( 1 << 1 )
+	#define RX_BD_FLAGS_END			( 1 << 2 )
+	#define RX_BD_FLAGS_START		( 1 << 3 )
+};
+
+struct bnx2_rx_ring_info {
+	uint32_t prod_bseq;
+	uint16_t prod;
+	uint16_t cons;
+	struct bnx2_rx_bd *desc;
 };
 
 /** A bnx2 network card */
@@ -379,11 +438,14 @@ struct bnx2_nic {
 	uint16_t fw_write_sequence;
 
 	struct bnx2_tx_ring_info tx_ring;
+	struct bnx2_rx_ring_info rx_ring;
 
 	uint32_t phy_addr;
 
 	struct net_device *netdev;
 	uint32_t hc_cmd;
+
+	struct io_buffer *rx_iobuf[RX_DESC_CNT];
 
 	/** MII interface */
 	struct mii_interface mii;
