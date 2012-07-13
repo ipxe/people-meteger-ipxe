@@ -39,6 +39,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
  * bnx2 network driver
  *
  */
+
 static uint32_t bnx2_reg_read_indirect ( struct bnx2_nic *bnx2,
 										 uint32_t offset ) {
 	uint32_t value;
@@ -90,30 +91,30 @@ static void bnx2_set_mac_address ( struct bnx2_nic *bnx2,
 
 	/* We use the lower 3 bytes as the back-off seed */
 	value = netdev->hw_addr[5] + netdev->hw_addr[4] + netdev->hw_addr[3];
-	value |= BNX2_EMAC_BACKOFF_SEED_EMAC_BACKOFF_SEED;
+	value &= BNX2_EMAC_BACKOFF_SEED_EMAC_BACKOFF_SEED;
 	writel ( value, bnx2->regs + BNX2_EMAC_BACKOFF_SEED );
 }
 
 static int bnx2_alloc_mem ( struct bnx2_nic *bnx2 ) {
 	bnx2->status_blk = malloc_dma ( sizeof ( struct status_block ),
 									sizeof ( struct status_block ) );
-	bnx2->tx_ring.tx_desc_ring = malloc_dma ( sizeof ( struct tx_bd ),
-											  sizeof ( struct tx_bd ) );
+	bnx2->tx_ring.tx_desc_ring = malloc_dma ( sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT,
+											  sizeof ( struct bnx2_tx_bd ) );
 	if ( !bnx2->status_blk || !bnx2->tx_ring.tx_desc_ring ) {
 		/* These are zeroed earlier so this is safe */
 		free_dma ( bnx2->status_blk, sizeof ( struct status_block ) );
-		free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct tx_bd ) );
+		free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct bnx2_tx_bd ) );
 		return -ENOMEM;
 	}
 	memset ( bnx2->status_blk, 0, sizeof ( struct status_block ) );
-	memset ( bnx2->tx_ring.tx_desc_ring, 0, sizeof ( struct tx_bd ) );
+	memset ( bnx2->tx_ring.tx_desc_ring, 0, sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT );
 	return 0;
 }
 
 static void bnx2_free_mem ( struct bnx2_nic *bnx2 ) {
 	free_dma ( bnx2->status_blk, sizeof ( struct status_block ) );
 	bnx2->status_blk = NULL;
-	free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct tx_bd ) );
+	free_dma ( bnx2->tx_ring.tx_desc_ring, sizeof ( struct bnx2_tx_bd ) );
 	bnx2->tx_ring.tx_desc_ring = NULL;
 }
 
@@ -336,6 +337,7 @@ static void bnx2_load_mips_firmware ( struct bnx2_nic *bnx2,
 static void bnx2_load_firmware ( struct bnx2_nic *bnx2 ) {
 	const uint32_t *rv2p_firmware;
 	const uint32_t *mips_firmware;
+
 	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
 		if ( CHIP_ID ( bnx2->misc_id ) == CHIP_ID_5709_A0 ||
 			 CHIP_ID ( bnx2->misc_id ) == CHIP_ID_5709_A1 )
@@ -453,9 +455,10 @@ static int bnx2_init_chip ( struct bnx2_nic *bnx2 ) {
 		return rc;
 
 	writel ( BNX2_MISC_ENABLE_DEFAULT, bnx2->regs + BNX2_MISC_ENABLE_SET_BITS );
-	writel ( BNX2_HC_COMMAND_ENABLE | BNX2_HC_COMMAND_COAL_NOW_WO_INT, bnx2->regs + BNX2_HC_COMMAND );
 	readl ( bnx2->regs + BNX2_MISC_ENABLE_SET_BITS );
+	writel ( BNX2_HC_COMMAND_ENABLE | BNX2_HC_COMMAND_COAL_NOW_WO_INT, bnx2->regs + BNX2_HC_COMMAND );
 	udelay ( 20 );
+	bnx2->hc_cmd = readl ( bnx2->regs + BNX2_HC_COMMAND );
 	return 0;
 }
 
@@ -488,10 +491,9 @@ static void bnx2_init_tx_context ( struct bnx2_nic *bnx2 ) {
 }
 
 static void bnx2_init_rings ( struct bnx2_nic *bnx2 ) {
-	struct tx_bd *txbd = bnx2->tx_ring.tx_desc_ring;
+	struct bnx2_tx_bd *txbd = bnx2->tx_ring.tx_desc_ring;
 
-	txbd->tx_bd_haddr_hi = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) >> 32;
-	txbd->tx_bd_haddr_lo = ( uint64_t ) virt_to_bus ( bnx2->tx_ring.tx_desc_ring ) & 0xffffffff;
+	txbd->haddr = virt_to_bus ( bnx2->tx_ring.tx_desc_ring );
 	bnx2->tx_ring.tx_prod = 0;
 	bnx2->tx_ring.tx_prod_bseq = 0;
 	bnx2_init_tx_context ( bnx2 );
@@ -511,12 +513,17 @@ static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
 
 static int bnx2_init_nic ( struct bnx2_nic *bnx2 ) {
 	int rc;
+	uint32_t value;
 
 	if ( ( rc = bnx2_reset_nic ( bnx2 ) ) != 0 )
 		return rc;
 
+	value = readl ( bnx2->regs + BNX2_EMAC_MODE );
+	value |= BNX2_EMAC_MODE_PORT_GMII;
+	writel ( value, bnx2->regs + BNX2_EMAC_MODE );
 	return 0;
 }
+
 /******************************************************************************
  *
  * MII interface
@@ -628,6 +635,7 @@ static struct mii_operations bnx2_mii_operations = {
  */
 static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
 	uint32_t value;
+
 	writel ( BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
 			 BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP,
 			 bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
@@ -658,7 +666,25 @@ static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
  */
 static void bnx2_check_link ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-	( void ) bnx2;
+	struct status_block *status_blk = bnx2->status_blk;
+	uint32_t status_idx = status_blk->status_idx;
+	uint32_t new_link = bnx2->status_blk->status_attn_bits & STATUS_ATTN_BITS_LINK_STATE;
+	uint32_t old_link = bnx2->status_blk->status_attn_bits_ack & STATUS_ATTN_BITS_LINK_STATE;
+
+	if ( new_link != old_link ) {
+		if ( new_link ) {
+			writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_PCICFG_STATUS_BIT_SET_CMD );
+			netdev_link_up ( netdev );
+		}
+		else {
+			writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_PCICFG_STATUS_BIT_CLEAR_CMD );
+			netdev_link_down ( netdev );
+		}
+		//writel ( BNX2_PCICFG_INT_ACK_CMD_MASK_INT | BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
+		//writel ( BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
+		writel ( bnx2->hc_cmd | BNX2_HC_COMMAND_COAL_NOW_WO_INT, bnx2->regs + BNX2_HC_COMMAND );
+		readl ( bnx2->regs + BNX2_HC_COMMAND );
+	}
 }
 
 /******************************************************************************
@@ -678,12 +704,10 @@ static int bnx2_open ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 	int rc;
 
-	if ( ( rc = bnx2_alloc_mem ( bnx2 ) ) )
-		return rc;
-
 	if ( ( rc = bnx2_init_nic ( bnx2 ) ) )
 		return rc;
 
+	bnx2_check_link ( netdev );
 	return 0;
 }
 
@@ -694,7 +718,7 @@ static int bnx2_open ( struct net_device *netdev ) {
  */
 static void bnx2_close ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-	bnx2_free_mem ( bnx2 );
+	( void ) bnx2;
 }
 
 /**
@@ -707,10 +731,26 @@ static void bnx2_close ( struct net_device *netdev ) {
 static int bnx2_transmit ( struct net_device *netdev,
 			       struct io_buffer *iobuf ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
+	struct bnx2_tx_ring_info *txr = &bnx2->tx_ring;
+	struct bnx2_tx_bd *txbd;
+	unsigned int tx_idx;
+	unsigned int tx_tail;
 
-	DBGC ( bnx2, "BNX2 %p does not yet support transmit\n", bnx2 );
-	( void ) iobuf;
-	return -ENOTSUP;
+	if ( ( txr->tx_prod - txr->tx_cons ) >= TX_DESC_CNT ) {
+		DBGC ( bnx2, "BNX2 %p out of transmit descriptors\n", bnx2 );
+		return -ENOBUFS;
+	}
+	tx_idx = ( txr->tx_prod++ % TX_DESC_CNT );
+	tx_tail = ( txr->tx_prod % TX_DESC_CNT );
+	txbd = &txr->tx_desc_ring[tx_idx];
+	txbd->haddr = ( ( uint64_t ) virt_to_bus ( iobuf->data ) ) << 32;
+	txbd->reserved = iob_len ( iobuf );
+	txbd->vlan_tag = TX_BD_FLAGS_START | TX_BD_FLAGS_END;
+	wmb();
+	txr->tx_prod_bseq += iob_len ( iobuf );
+	writew ( tx_tail, bnx2->regs + MB_TX_CID_ADDR + BNX2_L2CTX_TX_HOST_BIDX );
+	writel ( txr->tx_prod_bseq, bnx2->regs + MB_TX_CID_ADDR + BNX2_L2CTX_TX_HOST_BSEQ );
+	return 0;
 }
 
 /**
@@ -720,9 +760,8 @@ static int bnx2_transmit ( struct net_device *netdev,
  */
 static void bnx2_poll ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-
-	/* Not yet implemented */
 	( void ) bnx2;
+	bnx2_check_link ( netdev );
 }
 
 /**
@@ -784,6 +823,8 @@ static int bnx2_probe ( struct pci_device *pci ) {
 
 	/* Map registers */
 	bnx2->regs = ioremap ( pci->membase, BNX2_BAR_SIZE );
+	if ( ( rc = bnx2_alloc_mem ( bnx2 ) ) )
+		goto err_alloc;
 
 	/* Reset the NIC */
 	if ( ( rc = bnx2_reset ( bnx2 ) ) != 0 )
@@ -792,11 +833,13 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	bnx2_set_mac_address ( bnx2, netdev );
 	/* Initialise and reset MII interface */
 	mii_init ( &bnx2->mii, &bnx2_mii_operations );
+	/*
 	if ( ( rc = mii_reset ( &bnx2->mii ) ) != 0 ) {
 		DBGC ( bnx2, "BNX2 %p could not reset MII: %s\n",
 		       bnx2, strerror ( rc ) );
 		goto err_mii_reset;
 	}
+	*/
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
@@ -808,8 +851,10 @@ static int bnx2_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
+/*
  err_mii_reset:
 	bnx2_reset ( bnx2 );
+*/
  err_reset:
 	netdev_nullify ( netdev );
 	netdev_put ( netdev );
@@ -831,6 +876,8 @@ static void bnx2_remove ( struct pci_device *pci ) {
 
 	/* Reset card */
 	bnx2_reset ( bnx2 );
+
+	bnx2_free_mem ( bnx2 );
 
 	/* Free network device */
 	netdev_nullify ( netdev );

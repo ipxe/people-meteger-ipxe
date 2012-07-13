@@ -20,6 +20,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define RV2P_PROC1										0
 #define RV2P_PROC2										1
 
+
+
 #define BNX2_PCICFG_REG_WINDOW_ADDRESS					0x00000078
 
 #define BNX2_PCICFG_REG_WINDOW							0x00000080
@@ -140,6 +142,9 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_PORT_HW_CFG_MAC_UPPER						0x00000050
 #define BNX2_PORT_HW_CFG_MAC_LOWER						0x00000054
 
+#define BNX2_EMAC_MODE									0x00001400
+#define BNX2_EMAC_MODE_PORT_GMII						( 2L << 2 )
+
 #define BNX2_EMAC_MDIO_COMM								0x000014ac
 #define BNX2_EMAC_MDIO_COMM_COMMAND_WRITE				( 1L << 26 )
 #define BNX2_EMAC_MDIO_COMM_COMMAND_READ				( 2L << 26 )
@@ -150,6 +155,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_EMAC_BACKOFF_SEED_EMAC_BACKOFF_SEED		( 0x3ffL << 0 )
 
 #define BNX2_PCICFG_INT_ACK_CMD							0x00000084
+#define BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID				( 1L << 16 )
 #define BNX2_PCICFG_INT_ACK_CMD_MASK_INT				( 1L << 18 )
 
 #define BNX2_HOST_VIEW_SHMEM_BASE						0x00167c00
@@ -191,7 +197,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #define BNX2_CTX_VIRT_ADDR								0x00001008
 
-#define BNX2_CTX_PAGE_TBL								0x00001010
+#define BNX2_CTX_PAGE_TBL								0x0000100c
 
 #define CTX_SHIFT						7
 #define CTX_SIZE						( 1 << CTX_SHIFT )
@@ -229,7 +235,26 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_L2CTX_TYPE_SIZE_L2				( ( 0xc0 / 0x20 ) << 16 )
 #define BNX2_L2CTX_TYPE_TYPE_L2							( 1 << 28 )
 
+#define BNX2_PCICFG_STATUS_BIT_SET_CMD					0x00000088
+#define BNX2_PCICFG_STATUS_BIT_CLEAR_CMD				0x0000008c
+
+#define BNX2_L2CTX_TX_HOST_BIDX							0x00000088
+#define BNX2_L2CTX_TX_HOST_BSEQ							0x00000090
+
+#define TX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_tx_bd ) )
+#define MAX_TX_DESC_CNT		( TX_DESC_CNT - 1 )
+
+#define NEXT_TX_BD(x) (((x) & (MAX_TX_DESC_CNT - 1)) ==			\
+		(MAX_TX_DESC_CNT - 1)) ?				\
+	(x) + 2 : (x) + 1
+
+#define MB_KERNEL_CTX_SHIFT								8
+#define MB_KERNEL_CTX_SIZE				( 1 << MB_KERNEL_CTX_SHIFT )
+#define MB_KERNEL_CTX_MASK				( MB_KERNEL_CTX_SIZE - 1 )
+#define MB_GET_CID_ADDR(_cid)	( 0x10000 + ( ( _cid ) << MB_KERNEL_CTX_SHIFT ) )
+
 #define TX_CID											16
+#define MB_TX_CID_ADDR						MB_GET_CID_ADDR(TX_CID)
 
 struct status_block {
 	uint32_t status_attn_bits;
@@ -320,20 +345,21 @@ struct status_block {
 #endif
 };
 
-struct tx_bd {
-	uint32_t tx_bd_haddr_hi;
-	uint32_t tx_bd_haddr_lo;
-	uint32_t tx_bd_mss_nbytes;
-	uint32_t tx_bd_vlan_tag_flags;
+struct bnx2_tx_bd {
+	uint64_t haddr;
+	uint16_t reserved;
+	uint16_t nbytes;
+	uint16_t vlan_tag;
+	uint16_t flags;
 	#define TX_BD_FLAGS_END			( 1 << 6 )
 	#define TX_BD_FLAGS_START		( 1 << 7 )
-};
+} __attribute__ (( packed ));
 
 struct bnx2_tx_ring_info {
 	uint32_t tx_prod_bseq;
 	uint16_t tx_prod;
-
-	struct tx_bd *tx_desc_ring;
+	uint16_t tx_cons;
+	struct bnx2_tx_bd *tx_desc_ring;
 };
 
 /** A bnx2 network card */
@@ -357,6 +383,7 @@ struct bnx2_nic {
 	uint32_t phy_addr;
 
 	struct net_device *netdev;
+	uint32_t hc_cmd;
 
 	/** MII interface */
 	struct mii_interface mii;
