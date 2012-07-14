@@ -15,6 +15,57 @@ FILE_LICENCE ( GPL2_OR_LATER );
 /** Default timeout */
 #define	VELOCITY_TIMEOUT_US	10000
 
+#define	VELOCITY_TX_FRAGS	7
+
+struct velocity_frag {
+	uint32_t	addr;
+	uint32_t	des2;
+};
+
+/** Velocity descriptor format */
+struct velocity_descriptor {
+	uint32_t	des0;
+	uint32_t	des1;
+	struct velocity_frag frags[VELOCITY_TX_FRAGS];
+};
+
+#define	VELOCITY_DES0_OWN	(1 << 31)
+#define	VELOCITY_DES0_TERR	(1 << 15)
+#define	VELOCITY_DES0_FDX	(1 << 14)
+#define	VELOCITY_DES0_GMII	(1 << 13)
+#define	VELOCITY_DES0_LNKFL	(1 << 12)
+#define	VELOCITY_DES0_SHDN	(1 << 10)
+#define	VELOCITY_DES0_CRS	(1 << 9)
+#define	VELOCITY_DES0_CDH	(1 << 8)
+#define	VELOCITY_DES0_ABT	(1 << 7)
+#define	VELOCITY_DES0_OWT	(1 << 6)
+#define	VELOCITY_DES0_OWC	(1 << 5)
+#define	VELOCITY_DES0_COLS	(1 << 4)
+
+#define	VELOCITY_DES1_CMDZ(_n)	(((_n) & 0xf) << 28)
+#define	VELOCITY_DES1_TCPLS	((1 << 24) | (1 << 25))
+#define	VELOCITY_DES1_TIC	(1 << 23)
+#define	VELOCITY_DES1_PIC	(1 << 22)
+#define	VELOCITY_DES1_VETAG	(1 << 21)
+#define	VELOCITY_DES1_IPCK	(1 << 20)
+#define	VELOCITY_DES1_UDPCK	(1 << 19)
+#define VELOCITY_DES1_TCPCK	(1 << 18)
+#define	VELOCITY_DES1_JMBO	(1 << 17)
+#define	VELOCITY_DES1_CRC	(1 << 16)
+
+#define	VELOCITY_DES2_SIZE(_n)	(((_n) & 0x1fff) << 16)
+
+/** Descriptor ring sizes */
+#define	VELOCITY_RXDESC_NUM	8
+#define	VELOCITY_RXDESC_SIZE	\
+    ( VELOCITY_RXDESC_NUM * sizeof ( struct velocity_descriptor ) )
+
+#define	VELOCITY_TXDESC_NUM	8
+#define	VELOCITY_TXDESC_SIZE	\
+    ( VELOCITY_TXDESC_NUM * sizeof ( struct velocity_descriptor ) )
+
+#define	VELOCITY_RING_ALIGN	64
+
 /** MAC address registers */
 #define VELOCITY_MAC0		0x00
 #define VELOCITY_MAC1		0x01
@@ -150,7 +201,31 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #define VELOCITY_TXSTS_PORT		0x2C    /* Transmit status port (???) */
 #define VELOCITY_TXQCSRS		0x30    /* TX queue ctl/status set */
+
+#define	VELOCITY_TXQCSRS_DEAD3		(1 << 15)
+#define	VELOCITY_TXQCSRS_WAK3		(1 << 14)
+#define	VELOCITY_TXQCSRS_ACT3		(1 << 13)
+#define	VELOCITY_TXQCSRS_RUN3		(1 << 12)
+#define	VELOCITY_TXQCSRS_DEAD2		(1 << 11)
+#define	VELOCITY_TXQCSRS_WAK2		(1 << 10)
+#define	VELOCITY_TXQCSRS_ACT2		(1 << 9)
+#define	VELOCITY_TXQCSRS_RUN2		(1 << 8)
+#define VELOCITY_TXQCSRS_DEAD1		(1 << 7)
+#define	VELOCITY_TXQCSRS_WAK1		(1 << 6)
+#define	VELOCITY_TXQCSRS_ACT1		(1 << 5)
+#define VELOCITY_TXQCSRS_RUN1		(1 << 4)
+#define	VELOCITY_TXQCSRS_DEAD0		(1 << 3)
+#define	VELOCITY_TXQCSRS_WAK0		(1 << 2)
+#define	VELOCITY_TXQCSRS_ACT0		(1 << 1)
+#define	VELOCITY_TXQCSRS_RUN0		(1 << 0)
+
 #define VELOCITY_RXQCSRS		0x32    /* RX queue ctl/status set */
+
+#define	VELOCITY_RXQCSRS_DEAD		(1 << 3)
+#define	VELOCITY_RXQCSRS_WAK		(1 << 2)
+#define	VELOCITY_RXQCSRS_ACT		(1 << 1)
+#define	VELOCITY_RXQCSRS_RUN		(1 << 0)
+
 #define VELOCITY_TXQCSRC		0x34    /* TX queue ctl/status clear */
 #define VELOCITY_RXQCSRC		0x36    /* RX queue ctl/status clear */
 #define VELOCITY_RXDESC_ADDR_LO		0x38    /* RX desc base addr (lo 32 bits) */
@@ -212,6 +287,16 @@ struct velocity_nic {
 	void *regs;
 	/** MII interface */
 	struct mii_interface mii;
+	/** Netdev */
+
+	struct velocity_descriptor *rx_ring;
+	struct io_buffer *rx_buffs[VELOCITY_RXDESC_NUM];
+	unsigned int rx_prod;
+	unsigned int rx_cons;
+
+	struct velocity_descriptor *tx_ring;
+	unsigned int tx_prod;
+	unsigned int tx_cons;
 };
 
 #endif /* _VELOCITY_H */
