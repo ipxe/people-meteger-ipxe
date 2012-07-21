@@ -12,7 +12,7 @@
 FILE_LICENCE ( GPL2_OR_LATER );
 
 /** bnx2 BAR size */
-#define BNX2_BAR_SIZE 256
+#define BNX2_BAR_SIZE									MB_GET_CID_ADDR ( 17 )
 
 #define BNX2_FW_ACK_TIMEOUT_MS							1000
 #define BNX2_MISC_ENABLE_DEFAULT						0x05ffffff
@@ -32,6 +32,9 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_PCICFG_REG_WINDOW_ADDRESS					0x00000078
 
 #define BNX2_PCICFG_REG_WINDOW							0x00000080
+
+#define BNX2_MISC_COMMAND								0x00000800
+#define BNX2_MISC_COMMAND_CORE_RESET					( 1L << 4 )
 
 #define BNX2_PCICFG_MISC_CONFIG							0x00000068
 #define BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP		( 1L << 3 )
@@ -273,12 +276,17 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_EMAC_MAC_MATCH0							0x00001410
 #define BNX2_EMAC_MAC_MATCH1							0x00001414
 
-#define RX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_rx_bd ) )
 #define TX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_tx_bd ) )
+#define RX_DESC_CNT			( BCM_PAGE_SIZE / sizeof ( struct bnx2_rx_bd ) )
 #define MAX_TX_DESC_CNT		( TX_DESC_CNT - 1 )
+#define MAX_RX_DESC_CNT		( RX_DESC_CNT - 1 )
 
 #define NEXT_TX_BD(x) (((x) & (MAX_TX_DESC_CNT - 1)) ==			\
 		(MAX_TX_DESC_CNT - 1)) ?				\
+	(x) + 2 : (x) + 1
+
+#define NEXT_RX_BD(x) (((x) & (MAX_RX_DESC_CNT - 1)) ==			\
+		(MAX_RX_DESC_CNT - 1)) ?				\
 	(x) + 2 : (x) + 1
 
 #define MB_KERNEL_CTX_SHIFT								8
@@ -287,7 +295,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define MB_GET_CID_ADDR(_cid)	( 0x10000 + ( ( _cid ) << MB_KERNEL_CTX_SHIFT ) )
 
 #define TX_CID											16
-#define RX_CID		0
+#define RX_CID											0
 
 #define TX_CID_ADDR							GET_CTX_ID_ADDR ( TX_CID )
 #define RX_CID_ADDR							GET_CTX_ID_ADDR ( RX_CID )
@@ -384,6 +392,30 @@ struct status_block {
 #endif
 };
 
+struct l2_fhdr {
+#if __BYTE_ORDER == __BIG_ENDIAN
+	uint16_t errors;
+	uint16_t status;
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
+	uint16_t status;
+	uint16_t errors;
+#endif
+
+	uint32_t hash;
+
+#if __BYTE_ORDER == __BIG_ENDIAN
+	uint16_t pkt_len;
+	uint16_t vlan_tag;
+	uint16_t ip_xsum;
+	uint16_t tcp_udp_xsum;
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
+	uint16_t vlan_tag;
+	uint16_t pkt_len;
+	uint16_t tcp_udp_xsum;
+	uint16_t ip_xsum;
+#endif
+} __attribute__ (( packed ));
+
 struct bnx2_tx_bd {
 	uint32_t haddr_hi;
 	uint32_t haddr_lo;
@@ -412,7 +444,7 @@ struct bnx2_rx_bd {
 	#define RX_BD_FLAGS_DUMMY		( 1 << 1 )
 	#define RX_BD_FLAGS_END			( 1 << 2 )
 	#define RX_BD_FLAGS_START		( 1 << 3 )
-};
+} __attribute__ (( packed ));
 
 struct bnx2_rx_ring_info {
 	uint32_t prod_bseq;

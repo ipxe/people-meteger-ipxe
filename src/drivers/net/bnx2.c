@@ -219,7 +219,7 @@ static void bnx2_init_context ( struct bnx2_nic *bnx2 ) {
 
 static uint32_t rv2p_fw_fixup ( int idx, uint32_t rv2p_code )
 {
-	switch (idx) {
+	switch ( idx ) {
 	case RV2P_P1_FIXUP_PAGE_SIZE_IDX:
 		rv2p_code &= ~RV2P_BD_PAGE_SIZE_MASK;
 		rv2p_code |= RV2P_BD_PAGE_SIZE;
@@ -364,61 +364,22 @@ static void bnx2_load_firmware ( struct bnx2_nic *bnx2 ) {
 
 static int bnx2_reset_chip ( struct bnx2_nic *bnx2 ) {
 	uint32_t value;
-	int i;
 	int rc;
 
-	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
-		value = readl ( bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
-		value &= ~BNX2_MISC_NEW_CORE_CTL_DMA_ENABLE;
-		writel ( value, bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
-		value = readl ( bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
-
-		for ( i = 0; i < 100; i++ ) {
-			value = readl ( bnx2->regs + BNX2_PCICFG_DEVICE_STATUS );
-			if ( ! ( value & BNX2_PCICFG_DEVICE_STATUS_NO_PEND ) )
-				break;
-
-			mdelay ( 1 );
-		}
-	} else {
-		value = BNX2_MISC_ENABLE_CLR_BITS_DMA_ENGINE_ENABLE |
-				BNX2_MISC_ENABLE_CLR_BITS_TX_DMA_ENABLE |
-				BNX2_MISC_ENABLE_CLR_BITS_RX_DMA_ENABLE |
-				BNX2_MISC_ENABLE_CLR_BITS_HOST_COALESCE_ENABLE;
-		writel ( value, bnx2->regs + BNX2_MISC_ENABLE_CLR_BITS );
-		value = readl ( bnx2->regs + BNX2_MISC_ENABLE_CLR_BITS );
-		udelay ( 5 );
-	}
 	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT0 |
 									 BNX2_DRV_MSG_CODE_RESET ) ) )
 		return rc;
 
 	bnx2_shmem_write ( bnx2, BNX2_DRV_RESET_SIGNATURE,
 							 BNX2_DRV_RESET_SIGNATURE_MAGIC );
-	value = readl ( bnx2->regs + BNX2_MISC_ID );
-	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
-		writel ( BNX2_MISC_COMMAND_SW_RESET, bnx2->regs + BNX2_MISC_COMMAND );
-		readl ( bnx2->regs + BNX2_MISC_COMMAND );
-		udelay ( 5 );
-		value = BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
-				BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP;
-		writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
-	} else {
-		value = BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
-				BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA |
-				BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP;
-		writel ( value, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
-		mdelay ( 20 );
-		value = readl ( bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
-		if ( value & ( BNX2_PCICFG_MISC_CONFIG_CORE_RST_REQ |
-					   BNX2_PCICFG_MISC_CONFIG_CORE_RST_BSY ) )
-			return -EBUSY;
-	}
-	value = readl ( bnx2->regs + BNX2_PCI_SWAP_DIAG0 );
-	if ( value != BNX2_PCI_SWAP_DIAG0_VALUE ) {
-		DBGC ( bnx2, "BNX2 %p byte swapping setup incorrectly", bnx2 );
-		return -ENOTSUP;
-	}
+
+	value = readl ( bnx2->regs + BNX2_MISC_COMMAND );
+	value |= BNX2_MISC_COMMAND_CORE_RESET;
+	writel ( value, bnx2->regs + BNX2_MISC_COMMAND );
+	udelay ( 100 );
+	value = readl ( bnx2->regs + BNX2_MISC_COMMAND );
+	udelay ( 100 );
+	writel ( BNX2_PCICFG_MISC_CONFIG_TARGET_MB_WORD_SWAP | BNX2_PCICFG_MISC_CONFIG_REG_WINDOW_ENA, bnx2->regs + BNX2_PCICFG_MISC_CONFIG );
 	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT1 |
 									 BNX2_DRV_MSG_CODE_RESET ) ) )
 		return rc;
@@ -445,7 +406,7 @@ static void bnx2_set_rx_mode ( struct bnx2_nic *bnx2 ) {
 	value = ( mac_addr[0] << 8 ) | mac_addr[1];
 	writel ( value, bnx2->regs +  BNX2_EMAC_MAC_MATCH0 );
 
-	value = ( mac_addr[2] << 24 ) | (mac_addr[3] << 16) |
+	value = ( mac_addr[2] << 24 ) | ( mac_addr[3] << 16 ) |
 			( mac_addr[4] << 8 ) | mac_addr[5];
 	writel ( value, bnx2->regs + BNX2_EMAC_MAC_MATCH1 );
 }
@@ -460,7 +421,7 @@ static int bnx2_init_chip ( struct bnx2_nic *bnx2 ) {
 			BNX2_DMA_CONFIG_CNTL_BYTE_SWAP |
 #endif
 			BNX2_DMA_CONFIG_CNTL_WORD_SWAP |
-			BNX2_DMA_CONFIG_CNTL_PING_PONG_DMA |
+			//BNX2_DMA_CONFIG_CNTL_PING_PONG_DMA |
 			( 2 << 20 ) |	/* PCI_CLK_CMP_BITS */
 			( 1 << 11 ) |	/* CNTL_PCI_COMP_DLY */
 			( 1 << 12 ) |	/* DMA read channels */
@@ -531,7 +492,7 @@ static void bnx2_init_rx_context ( struct bnx2_nic *bnx2 ) {
 	uint32_t value;
 	value = BNX2_L2CTX_CTX_TYPE_CTX_BD_CHN_TYPE_VALUE |
 			BNX2_L2CTX_CTX_TYPE_SIZE_L2 |
-			( 2 << 8 );
+			( 2 << 8 ) /* bd_pre_read */ ;
 	bnx2_context_write ( bnx2, RX_CID_ADDR, BNX2_L2CTX_CTX_TYPE, value );
 
 	bnx2_context_write ( bnx2, RX_CID_ADDR, BNX2_L2CTX_NX_BDHADDR_HI, 0 );
@@ -540,38 +501,44 @@ static void bnx2_init_rx_context ( struct bnx2_nic *bnx2 ) {
 	bnx2_context_write ( bnx2, RX_CID_ADDR, BNX2_L2CTX_NX_BDHADDR_LO, value );
 }
 
-static void bnx2_init_rings ( struct bnx2_nic *bnx2 ) {
+static void bnx2_init_tx_ring ( struct bnx2_nic *bnx2 ) {
 	struct bnx2_tx_ring_info *txr = &bnx2->tx_ring;
-	struct bnx2_rx_ring_info *rxr = &bnx2->rx_ring;
+	struct bnx2_tx_bd *txbd;
 	unsigned int i;
-	uint16_t prod = 0;
+
+	txbd = &txr->desc[MAX_TX_DESC_CNT];
+	txbd->haddr_hi = 0;
+	txbd->haddr_lo = virt_to_bus ( txr->desc );
 	for ( i = 0; i < TX_DESC_CNT; i++ ) {
-		struct bnx2_tx_bd *txbd = &txr->desc[i];
+		txbd = &txr->desc[i];
 		txbd->flags = TX_BD_FLAGS_START | TX_BD_FLAGS_END;
 	}
 	bnx2_init_tx_context ( bnx2 );
+}
 
-#define MAX_RX_DESC_CNT (RX_DESC_CNT - 1)
-#define NEXT_RX_BD(x) (((x) & (MAX_RX_DESC_CNT - 1)) ==			\
-		(MAX_RX_DESC_CNT - 1)) ?				\
-	(x) + 2 : (x) + 1
-
-	for ( i = 0; i < RX_DESC_CNT; i++ ) {
-		struct bnx2_rx_bd *rxbd = &rxr->desc[i];
+static void bnx2_init_rx_ring ( struct bnx2_nic *bnx2 ) {
+	struct bnx2_rx_ring_info *rxr = &bnx2->rx_ring;
+	struct bnx2_rx_bd *rxbd;
+	int i;
+	for ( i = 0; i < MAX_RX_DESC_CNT; i++ ) {
+		rxbd = &rxr->desc[i];
 		rxbd->flags = RX_BD_FLAGS_START | RX_BD_FLAGS_END;
 		rxbd->len = RX_BUF_USE_SIZE;
 	}
+	rxbd = &rxr->desc[MAX_RX_DESC_CNT];
+	rxbd->haddr_hi = 0;
+	rxbd->haddr_lo = ( uint64_t ) virt_to_bus ( rxr->desc ) & 0xffffffff;
+
 	bnx2_init_rx_context ( bnx2 );
 
-	{
-		static uint8_t buffer[1024 * 10];
-		struct bnx2_rx_bd *rxbd = rxr->desc;
-		rxbd->haddr_lo = virt_to_bus(buffer);
-		rxr->prod_bseq = RX_BUF_USE_SIZE;
-		prod++;
-	}
-	writew ( prod, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BDIDX );
+	/*
+	rxr->desc[0].haddr_hi = 0;
+	rxr->desc[0].haddr_lo = 0;//virt_to_bus ( rxr->desc );
+	rxr->prod_bseq += RX_BUF_USE_SIZE;
+	rxr->prod = NEXT_RX_BD ( rxr->prod );
+	writew ( rxr->prod, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BDIDX );
 	writel ( rxr->prod_bseq, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BSEQ );
+	*/
 }
 
 static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
@@ -582,7 +549,8 @@ static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
 	if ( ( rc = bnx2_init_chip ( bnx2 ) ) != 0 )
 		return rc;
 
-	bnx2_init_rings ( bnx2 );
+	bnx2_init_tx_ring ( bnx2 );
+	bnx2_init_rx_ring ( bnx2 );
 	return 0;
 }
 
@@ -769,7 +737,6 @@ static void bnx2_check_link ( struct net_device *netdev ) {
  *
  ******************************************************************************
  */
-
 static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 	struct bnx2_rx_ring_info *rxr = &bnx2->rx_ring;
 	struct bnx2_rx_bd *rxbd;
@@ -778,16 +745,19 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 	unsigned int rx_tail;
 
 	while ( ( rxr->prod - rxr->cons ) < BNX2_RX_FILL ) {
-		iobuf = alloc_iob ( RX_BUF_USE_SIZE );
+		iobuf = alloc_iob ( RX_BUF_SIZE );
 		if ( ! iobuf )
 			return;
 
 		rxr->prod_bseq += RX_BUF_USE_SIZE;
 		rx_idx = ( rxr->prod++ % RX_DESC_CNT );
-		rx_tail = ( rxr->prod % TX_DESC_CNT );
+		if ( ( ( rxr->prod - 1 ) & ( MAX_RX_DESC_CNT - 1 ) ) == ( MAX_RX_DESC_CNT - 1 ) )
+			rxr->prod++;
+
+		rx_tail = ( rxr->prod % RX_DESC_CNT );
 		rxbd = &rxr->desc[rx_idx];
 
-		memset ( iobuf->data, 0, RX_BUF_USE_SIZE );
+		memset ( iobuf->data, 0, RX_BUF_SIZE );
 		rxbd->haddr_lo = virt_to_bus ( iobuf->data );
 		wmb();
 
@@ -797,7 +767,6 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 		writel ( rxr->prod_bseq, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BSEQ );
 	}
 }
-
 /**
  * Open network device
  *
@@ -811,9 +780,9 @@ static int bnx2_open ( struct net_device *netdev ) {
 	if ( ( rc = bnx2_init_nic ( bnx2 ) ) )
 		return rc;
 
-	bnx2_check_link ( netdev );
+	//bnx2_check_link ( netdev );
 
-	//bnx2_refill_rx ( bnx2 );
+	bnx2_refill_rx ( bnx2 );
 	return 0;
 }
 
@@ -846,6 +815,9 @@ static int bnx2_transmit ( struct net_device *netdev,
 		return -ENOBUFS;
 	}
 	tx_idx = ( txr->prod++ % TX_DESC_CNT );
+	if ( ( ( txr->prod - 1 ) & ( MAX_TX_DESC_CNT - 1 ) ) == ( MAX_TX_DESC_CNT - 1 ) )
+		txr->prod++;
+
 	tx_tail = ( txr->prod % TX_DESC_CNT );
 
 	txbd = &txr->desc[tx_idx];
@@ -855,11 +827,6 @@ static int bnx2_transmit ( struct net_device *netdev,
 	txr->prod_bseq += iob_len ( iobuf );
 	writew ( tx_tail, bnx2->regs + MB_TX_CID_ADDR + BNX2_L2CTX_TX_HOST_BIDX );
 	writel ( txr->prod_bseq, bnx2->regs + MB_TX_CID_ADDR + BNX2_L2CTX_TX_HOST_BSEQ );
-
-	mdelay (3000);
-	rmb();
-	dbg_printf ("rx_cons: %d\n", bnx2->status_blk->status_rx_quick_consumer_index0);
-	while ( 1 ) {}
 	return 0;
 }
 
@@ -881,16 +848,28 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
 	uint32_t length;
+	uint16_t hw_cons = bnx2->status_blk->status_rx_quick_consumer_index0;
+	struct l2_fhdr *hdr;
+	int i;
 
-	while ( rxr->cons != rxr->prod ) {
+	rmb();
+	while ( rxr->cons != hw_cons ) {
 		rx_idx = ( rxr->cons % RX_DESC_CNT );
 		rxbd = &rxr->desc[rx_idx];
 
 		iobuf = bnx2->rx_iobuf[rx_idx];
-		length = rxbd->len;
+		bnx2->rx_iobuf[rx_idx] = NULL;
+		hdr = ( struct l2_fhdr * ) iobuf->data;
+		iobuf->data += sizeof ( struct l2_fhdr ) + 2;
+		length = hdr->pkt_len - 4 + sizeof ( struct l2_fhdr ) + 2;
 		iob_put ( iobuf, length );
-		netdev_rx ( netdev, iobuf );
-		rxr->cons++;
+		if ( hdr->errors )
+			netdev_rx_err ( netdev, iobuf, -EIO );
+		else
+			netdev_rx ( netdev, iobuf );
+
+		rxr->cons = NEXT_RX_BD ( rxr->cons );
+		//rxr->cons++;
 	}
 }
 
@@ -904,7 +883,7 @@ static void bnx2_poll ( struct net_device *netdev ) {
 
 	bnx2_poll_tx ( netdev );
 	bnx2_poll_rx ( netdev );
-	//bnx2_refill_rx ( bnx2 );
+	bnx2_refill_rx ( bnx2 );
 	//bnx2_check_link ( netdev );
 }
 
@@ -989,7 +968,8 @@ static int bnx2_probe ( struct pci_device *pci ) {
 		goto err_register_netdev;
 
 	/* Set initial link state */
-	bnx2_check_link ( netdev );
+	netdev_link_up ( netdev );
+	//bnx2_check_link ( netdev );
 
 	return 0;
 
