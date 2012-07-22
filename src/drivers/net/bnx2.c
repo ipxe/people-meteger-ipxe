@@ -742,7 +742,6 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 	struct bnx2_rx_bd *rxbd;
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
-	unsigned int rx_tail;
 
 	while ( ( rxr->prod - rxr->cons ) < BNX2_RX_FILL ) {
 		iobuf = alloc_iob ( RX_BUF_SIZE );
@@ -754,7 +753,6 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 		if ( ( ( rxr->prod - 1 ) & ( MAX_RX_DESC_CNT - 1 ) ) == ( MAX_RX_DESC_CNT - 1 ) )
 			rxr->prod++;
 
-		rx_tail = ( rxr->prod % RX_DESC_CNT );
 		rxbd = &rxr->desc[rx_idx];
 
 		memset ( iobuf->data, 0, RX_BUF_SIZE );
@@ -763,7 +761,7 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 
 		bnx2->rx_iobuf[rx_idx] = iobuf;
 
-		writew ( rx_tail, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BDIDX );
+		writew ( rxr->prod, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BDIDX );
 		writel ( rxr->prod_bseq, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BSEQ );
 	}
 }
@@ -853,6 +851,9 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 	int i;
 
 	rmb();
+	if ( ( hw_cons & MAX_RX_DESC_CNT ) == MAX_RX_DESC_CNT )
+		hw_cons++;
+
 	while ( rxr->cons != hw_cons ) {
 		rx_idx = ( rxr->cons % RX_DESC_CNT );
 		rxbd = &rxr->desc[rx_idx];
@@ -862,6 +863,7 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 		hdr = ( struct l2_fhdr * ) iobuf->data;
 		iobuf->data += sizeof ( struct l2_fhdr ) + 2;
 		length = hdr->pkt_len - 4 + sizeof ( struct l2_fhdr ) + 2;
+
 		iob_put ( iobuf, length );
 		if ( hdr->errors )
 			netdev_rx_err ( netdev, iobuf, -EIO );
@@ -869,7 +871,6 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 			netdev_rx ( netdev, iobuf );
 
 		rxr->cons = NEXT_RX_BD ( rxr->cons );
-		//rxr->cons++;
 	}
 }
 
@@ -880,7 +881,6 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
  */
 static void bnx2_poll ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-
 	bnx2_poll_tx ( netdev );
 	bnx2_poll_rx ( netdev );
 	bnx2_refill_rx ( bnx2 );
