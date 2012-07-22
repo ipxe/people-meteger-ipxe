@@ -710,11 +710,9 @@ static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
 static void bnx2_check_link ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 	struct status_block *status_blk = bnx2->status_blk;
-	//uint32_t status_idx = status_blk->status_idx;
+	uint32_t status_idx = status_blk->status_idx;
 	uint32_t new_link = bnx2->status_blk->status_attn_bits & STATUS_ATTN_BITS_LINK_STATE;
 	uint32_t old_link = bnx2->status_blk->status_attn_bits_ack & STATUS_ATTN_BITS_LINK_STATE;
-	netdev_link_up ( netdev );
-	return;
 	if ( new_link != old_link ) {
 		if ( new_link ) {
 			writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_PCICFG_STATUS_BIT_SET_CMD );
@@ -724,8 +722,8 @@ static void bnx2_check_link ( struct net_device *netdev ) {
 			writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_PCICFG_STATUS_BIT_CLEAR_CMD );
 			netdev_link_down ( netdev );
 		}
-		//writel ( BNX2_PCICFG_INT_ACK_CMD_MASK_INT | BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
-		//writel ( BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
+		writel ( BNX2_PCICFG_INT_ACK_CMD_MASK_INT | BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
+		writel ( BNX2_PCICFG_INT_ACK_CMD_INDEX_VALID | status_idx, bnx2->regs + BNX2_PCICFG_INT_ACK_CMD );
 		writel ( bnx2->hc_cmd | BNX2_HC_COMMAND_COAL_NOW_WO_INT, bnx2->regs + BNX2_HC_COMMAND );
 		readl ( bnx2->regs + BNX2_HC_COMMAND );
 	}
@@ -884,7 +882,7 @@ static void bnx2_poll ( struct net_device *netdev ) {
 	bnx2_poll_tx ( netdev );
 	bnx2_poll_rx ( netdev );
 	bnx2_refill_rx ( bnx2 );
-	//bnx2_check_link ( netdev );
+	bnx2_check_link ( netdev );
 }
 
 /**
@@ -968,8 +966,7 @@ static int bnx2_probe ( struct pci_device *pci ) {
 		goto err_register_netdev;
 
 	/* Set initial link state */
-	netdev_link_up ( netdev );
-	//bnx2_check_link ( netdev );
+	bnx2_check_link ( netdev );
 
 	return 0;
 
