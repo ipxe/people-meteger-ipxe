@@ -273,12 +273,52 @@ static int velocity_alloc_rings ( struct velocity_nic *vlc )
 	memset ( vlc->tx_ring, 0, VELOCITY_TXDESC_SIZE );
 
 	writel ( virt_to_bus ( vlc->rx_ring ), vlc->regs + VELOCITY_RXDESC_ADDR_LO );
-	writew ( VELOCITY_RXDESC_NUM, vlc->regs + VELOCITY_RXDESCNUM );
+	writew ( VELOCITY_RXDESC_NUM - 1, vlc->regs + VELOCITY_RXDESCNUM );
 	writel ( virt_to_bus ( vlc->tx_ring ), vlc->regs + VELOCITY_TXDESC_ADDR_LO0 );
-	writew ( VELOCITY_TXDESC_NUM, vlc->regs + VELOCITY_TXDESCNUM );
+	writew ( VELOCITY_TXDESC_NUM - 1, vlc->regs + VELOCITY_TXDESCNUM );
 
 	DBGC ( vlc, "VELOCITY %p TX ring start address: %p\n", vlc, vlc->tx_ring );
 	DBGC ( vlc, "VELOCITY %p TX ring phys: 0x%08lx\n", vlc, virt_to_bus ( vlc->tx_ring ) );
+
+	return 0;
+}
+
+static int velocity_refill_rx ( struct velocity_nic *vlc )
+{
+	struct velocity_rx_descriptor *desc;
+	struct io_buffer *iobuf;
+	int rx_idx, i = 0;
+
+	while ( ( vlc->rx_prod - vlc->rx_cons ) < VELOCITY_RXDESC_NUM ) {
+		iobuf = alloc_iob ( VELOCITY_RX_MAX_LEN );
+		if ( ! iobuf )
+			return 0;
+
+		rx_idx = ( vlc->rx_prod++ % VELOCITY_RXDESC_NUM );
+		desc = &vlc->rx_ring[rx_idx];
+#if 0
+		desc->des0 = cpu_to_le32 ( VELOCITY_DES0_OWN );
+#endif
+		desc->des1 = 0;
+		desc->addr = virt_to_bus ( iobuf-> data );
+		desc->des2 = cpu_to_le32 ( 
+		    VELOCITY_DES2_SIZE( VELOCITY_RX_MAX_LEN - 1 ) |
+		    VELOCITY_DES2_IC );
+
+		vlc->rx_buffs[rx_idx] = iobuf;
+		i++;
+	
+		if ( rx_idx % 4 == 3 ) {
+			int j;
+			for (j = 0; j < 4; j++) {
+				desc = &vlc->rx_ring[rx_idx - j];
+				desc->des0 = cpu_to_le32 ( VELOCITY_DES0_OWN );
+			}
+		}
+	}
+
+	if (i > 0)
+		DBGC2 ( vlc, "VELOCITY %p refilled %d RX descriptors\n", vlc, i );
 
 	return 0;
 }
@@ -302,34 +342,38 @@ static int velocity_open ( struct net_device *netdev ) {
 
 	if ( ( rc = velocity_alloc_rings ( vlc ) ) != 0 )
 		return rc;
-#if 0
+	
 	if ( ( rc = velocity_refill_rx ( vlc ) ) != 0 )
 		goto err_refill_rx;
-#endif
 
 	writew ( VELOCITY_TXQCSRS_RUN0, vlc->regs + VELOCITY_TXQCSRS );
-	writew ( VELOCITY_RXQCSRS_RUN | VELOCITY_RXQCSRS_ACT, vlc->regs + VELOCITY_RXQCSRS );
+	writew ( VELOCITY_RXQCSRS_RUN | VELOCITY_RXQCSRS_WAK,
+	    vlc->regs + VELOCITY_RXQCSRS );
 
 	/* Enable interrupts */
 	writeb ( 0xff, vlc->regs + VELOCITY_IMR0 );
 	writeb ( 0xff, vlc->regs + VELOCITY_IMR1 );
-
+#if 0
+	/* Set up packet filter */
+	writeb ( RHINE_RCR_FILTER_ACCEPT | RHINE_RCR_BCAST_ACCEPT |
+	    RHINE_RCR_RUNT_ACCEPT, vlc->regs + VELOCITY_RCR );
+#endif
 	/* Start MAC */
 	writeb ( VELOCITY_CRS0_STOP, vlc->regs + VELOCITY_CRC0 );
 	writeb ( VELOCITY_CRS1_DPOLL, vlc->regs + VELOCITY_CRC0 );
 	writeb ( VELOCITY_CRS0_START | VELOCITY_CRS0_TXON | VELOCITY_CRS0_RXON,
 	    vlc->regs + VELOCITY_CRS0 );
 
+	writeb ( 0xff, vlc->regs + VELOCITY_RCR );
+
 	velocity_autopoll_start ( vlc );
 	
 	return 0;
 
-#if 0
 err_refill_rx:
 	free_dma ( vlc->rx_ring, VELOCITY_RXDESC_SIZE );
 	free_dma ( vlc->tx_ring, VELOCITY_TXDESC_SIZE );
 	return rc;
-#endif
 }
 
 /**
@@ -339,8 +383,36 @@ err_refill_rx:
  */
 static void velocity_close ( struct net_device *netdev ) {
 	struct velocity_nic *vlc = netdev->priv;
+	int i;
 
-	DBGC ( vlc, "VELOCITY %p does not yet support close\n", vlc );
+	DBGC ( vlc, "VELOCITY %p close\n", vlc );
+
+	/* Clear RX ring information */
+	writel ( 0, vlc->regs + VELOCITY_RXDESC_ADDR_LO );
+	writew ( 0, vlc->regs + VELOCITY_RXDESCNUM );
+
+	/* Destroy RX ring */
+	free_dma ( vlc->rx_ring, VELOCITY_RXDESC_SIZE );
+	vlc->rx_ring = NULL;
+	vlc->rx_prod = 0;
+	vlc->rx_cons = 0;
+
+	/* Discard receive buffers */
+	for ( i = 0 ; i < VELOCITY_RXDESC_NUM ; i++ ) {
+		if ( vlc->rx_buffs[i] )
+			free_iob ( vlc->rx_buffs[i] );
+		vlc->rx_buffs[i] = NULL;
+	}
+
+	/* Clear TX ring information */
+	writel ( 0, vlc->regs + VELOCITY_TXDESC_ADDR_LO0 );
+	writew ( 0, vlc->regs + VELOCITY_TXDESCNUM );
+
+	/* Destroy TX ring */
+	free_dma ( vlc->tx_ring, VELOCITY_TXDESC_SIZE );
+	vlc->tx_ring = NULL;
+	vlc->tx_prod = 0;
+	vlc->tx_cons = 0;
 }
 
 /**
@@ -376,6 +448,51 @@ static int velocity_transmit ( struct net_device *netdev,
 	return 0;
 }
 
+static void velocity_poll_rx ( struct velocity_nic *vlc ) {
+	struct velocity_rx_descriptor *desc;
+	struct io_buffer *iobuf;
+	int rx_idx;
+
+	while ( vlc->rx_cons != vlc->rx_prod ) {
+		rx_idx = ( vlc->rx_cons % VELOCITY_RXDESC_NUM );
+		desc = &vlc->rx_ring[rx_idx];
+
+		if ( le32_to_cpu ( desc->des0 ) & VELOCITY_DES0_OWN )
+			return;
+
+		DBGC2 ( vlc, "VELOCITY %p got packet on idx=%d (prod=%d)\n",
+		    vlc, rx_idx, vlc->rx_prod % VELOCITY_RXDESC_NUM );
+
+		iobuf = vlc->rx_buffs[rx_idx];
+
+		iob_put ( iobuf, VELOCITY_DES0_RMBC ( 
+		    le32_to_cpu ( desc->des0 ) ) );
+		
+		netdev_rx ( vlc->netdev, iobuf );
+		
+		vlc->rx_cons++;
+	}
+}
+
+static void velocity_poll_tx ( struct velocity_nic *vlc ) {
+	struct velocity_descriptor *desc;
+	int tx_idx;
+
+	while ( vlc->tx_cons != vlc->tx_prod ) {
+		tx_idx = ( vlc->tx_cons % VELOCITY_TXDESC_NUM );
+		desc = &vlc->tx_ring[tx_idx];
+
+		if ( le32_to_cpu ( desc->des0 ) & VELOCITY_DES0_OWN )
+			return;
+
+		netdev_tx_complete_next ( vlc->netdev );
+
+		DBGC2 ( vlc, "VELOCITY %p poll_tx cons=%d prod=%d tsr=%04x\n",
+		    vlc, tx_idx, vlc->tx_prod % VELOCITY_TXDESC_NUM, ( desc->des0 & 0xffff ) );
+		vlc->tx_cons++;
+	}
+}
+
 /**
  * Poll for completed and received packets
  *
@@ -388,18 +505,26 @@ static void velocity_poll ( struct net_device *netdev ) {
 	isr0 = readb ( vlc->regs + VELOCITY_ISR0 );
 	isr1 = readb ( vlc->regs + VELOCITY_ISR1 );
 
-	if ( isr0 ) {
-		DBGC ( vlc, "VELOCITY %p ISR0=0x%02x\n", vlc, isr0 );
+	if ( isr0 & VELOCITY_ISR0_PTX0 ) {
+		DBGC2 ( vlc, "VELOCITY %p TX interrupt\n", vlc );
+		velocity_poll_tx ( vlc );
 	}
 
-	if ( isr1 & VELOCITY_ISR1_SRCI )
+	if ( isr0 & VELOCITY_ISR0_PRXI ) {
+		DBGC2 ( vlc, "VELOCITY %p RX interrupt\n", vlc );
+		velocity_poll_rx ( vlc );
+	}
+
+	if ( isr1 & VELOCITY_ISR1_SRCI ) {
+		DBGC2 ( vlc, "VELOCITY %p link status interrupt\n", vlc );
 		velocity_check_link ( netdev ); 
+	}
 
 	writeb ( 0xff, vlc->regs + VELOCITY_ISR0 );
 	writeb ( 0xff, vlc->regs + VELOCITY_ISR1 ); 
-
-	/* Not yet implemented */
-	( void ) vlc;
+	velocity_refill_rx ( vlc );
+	writeb ( VELOCITY_RXQCSRS_RUN | VELOCITY_RXQCSRS_WAK,
+	    vlc->regs + VELOCITY_RXQCSRS );
 }
 
 /**
@@ -459,6 +584,7 @@ static int velocity_probe ( struct pci_device *pci ) {
 
 	/* Map registers */
 	vlc->regs = ioremap ( pci->membase, VELOCITY_BAR_SIZE );
+	vlc->netdev = netdev;
 
 	/* Reset the NIC */
 	if ( ( rc = velocity_reset ( vlc ) ) != 0 )

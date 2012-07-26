@@ -29,8 +29,17 @@ struct velocity_descriptor {
 	struct velocity_frag frags[VELOCITY_TX_FRAGS];
 };
 
+struct velocity_rx_descriptor {
+	uint32_t	des0;
+	uint32_t	des1;
+	uint32_t	addr;
+	uint32_t	des2;
+};
+
+#define	VELOCITY_DES0_RMBC(_n)	(((_n) >> 16) & 0x1fff)
 #define	VELOCITY_DES0_OWN	(1 << 31)
 #define	VELOCITY_DES0_TERR	(1 << 15)
+#define	VELOCITY_DES0_RXOK	(1 << 15)
 #define	VELOCITY_DES0_FDX	(1 << 14)
 #define	VELOCITY_DES0_GMII	(1 << 13)
 #define	VELOCITY_DES0_LNKFL	(1 << 12)
@@ -53,18 +62,21 @@ struct velocity_descriptor {
 #define	VELOCITY_DES1_JMBO	(1 << 17)
 #define	VELOCITY_DES1_CRC	(1 << 16)
 
+#define	VELOCITY_DES2_IC	(1 << 31)
 #define	VELOCITY_DES2_SIZE(_n)	(((_n) & 0x1fff) << 16)
 
 /** Descriptor ring sizes */
 #define	VELOCITY_RXDESC_NUM	8
 #define	VELOCITY_RXDESC_SIZE	\
-    ( VELOCITY_RXDESC_NUM * sizeof ( struct velocity_descriptor ) )
+    ( VELOCITY_RXDESC_NUM * sizeof ( struct velocity_rx_descriptor ) )
 
 #define	VELOCITY_TXDESC_NUM	8
 #define	VELOCITY_TXDESC_SIZE	\
     ( VELOCITY_TXDESC_NUM * sizeof ( struct velocity_descriptor ) )
 
 #define	VELOCITY_RING_ALIGN	64
+
+#define	VELOCITY_RX_MAX_LEN	2048
 
 /** MAC address registers */
 #define VELOCITY_MAC0		0x00
@@ -288,8 +300,9 @@ struct velocity_nic {
 	/** MII interface */
 	struct mii_interface mii;
 	/** Netdev */
+	struct net_device *netdev;
 
-	struct velocity_descriptor *rx_ring;
+	struct velocity_rx_descriptor *rx_ring;
 	struct io_buffer *rx_buffs[VELOCITY_RXDESC_NUM];
 	unsigned int rx_prod;
 	unsigned int rx_cons;
