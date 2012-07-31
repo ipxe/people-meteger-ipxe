@@ -153,7 +153,11 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define BNX2_PORT_HW_CFG_MAC_LOWER						0x00000054
 
 #define BNX2_EMAC_MODE									0x00001400
+#define BNX2_EMAC_MODE_HALF_DUPLEX						( 1L << 1 )
+#define BNX2_EMAC_MODE_PORT_MII							( 1L << 2 )
 #define BNX2_EMAC_MODE_PORT_GMII						( 2L << 2 )
+#define BNX2_EMAC_MODE_PORT_MII_10						( 3L << 2 )
+#define BNX2_EMAC_MODE_25G								( 1L << 5 )
 
 #define BNX2_EMAC_MDIO_COMM								0x000014ac
 #define BNX2_EMAC_MDIO_COMM_COMMAND_WRITE				( 1L << 26 )
@@ -303,7 +307,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define MB_TX_CID_ADDR						MB_GET_CID_ADDR(TX_CID)
 #define MB_RX_CID_ADDR						MB_GET_CID_ADDR(RX_CID)
 
-struct status_block {
+struct bnx2_status_block {
 	uint32_t status_attn_bits;
 	#define STATUS_ATTN_BITS_LINK_STATE					( 1L << 0 )
 	#define STATUS_ATTN_BITS_TX_SCHEDULER_ABORT			( 1L << 1 )
@@ -465,7 +469,7 @@ struct bnx2_nic {
 	/** Shared memory */
 	uint32_t shmem;
 
-	struct status_block *status_blk;
+	struct bnx2_status_block *status_blk;
 	/** Firmware write counter */
 	uint16_t fw_write_sequence;
 

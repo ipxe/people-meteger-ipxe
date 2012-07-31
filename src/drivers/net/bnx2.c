@@ -34,6 +34,13 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include "bnx2.h"
 #include "bnx2_fw.h"
 
+#define SPEED_10		10
+#define SPEED_100		100
+#define SPEED_1000		1000
+#define SPEED_2500		2500
+#define DUPLEX_HALF		1
+#define DUPLEX_FULL		2
+
 /** @file
  *
  * bnx2 network driver
@@ -98,8 +105,8 @@ static void bnx2_set_mac_address ( struct bnx2_nic *bnx2,
 }
 
 static int bnx2_alloc_mem ( struct bnx2_nic *bnx2 ) {
-	bnx2->status_blk = malloc_dma ( sizeof ( struct status_block ),
-									sizeof ( struct status_block ) );
+	bnx2->status_blk = malloc_dma ( sizeof ( struct bnx2_status_block ),
+									sizeof ( struct bnx2_status_block ) );
 	bnx2->tx_ring.desc = malloc_dma ( sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT,
 									  sizeof ( struct bnx2_tx_bd ) );
 	bnx2->rx_ring.desc = malloc_dma ( sizeof ( struct bnx2_rx_bd ) * RX_DESC_CNT,
@@ -109,14 +116,14 @@ static int bnx2_alloc_mem ( struct bnx2_nic *bnx2 ) {
 		bnx2_free_mem ( bnx2 );
 		return -ENOMEM;
 	}
-	memset ( bnx2->status_blk, 0, sizeof ( struct status_block ) );
+	memset ( bnx2->status_blk, 0, sizeof ( struct bnx2_status_block ) );
 	memset ( bnx2->tx_ring.desc, 0, sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT );
 	memset ( bnx2->rx_ring.desc, 0, sizeof ( struct bnx2_rx_bd ) * RX_DESC_CNT );
 	return 0;
 }
 
 static void bnx2_free_mem ( struct bnx2_nic *bnx2 ) {
-	free_dma ( bnx2->status_blk, sizeof ( struct status_block ) );
+	free_dma ( bnx2->status_blk, sizeof ( struct bnx2_status_block ) );
 	bnx2->status_blk = NULL;
 	free_dma ( bnx2->tx_ring.desc, sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT );
 	bnx2->tx_ring.desc = NULL;
@@ -365,11 +372,6 @@ static void bnx2_load_firmware ( struct bnx2_nic *bnx2 ) {
 static int bnx2_reset_chip ( struct bnx2_nic *bnx2 ) {
 	uint32_t value;
 	int rc;
-
-	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT0 |
-									 BNX2_DRV_MSG_CODE_RESET ) ) )
-		return rc;
-
 	bnx2_shmem_write ( bnx2, BNX2_DRV_RESET_SIGNATURE,
 							 BNX2_DRV_RESET_SIGNATURE_MAGIC );
 
@@ -520,7 +522,7 @@ static void bnx2_init_rx_ring ( struct bnx2_nic *bnx2 ) {
 	struct bnx2_rx_ring_info *rxr = &bnx2->rx_ring;
 	struct bnx2_rx_bd *rxbd;
 	int i;
-	for ( i = 0; i < MAX_RX_DESC_CNT; i++ ) {
+	for ( i = 0; i < ( int ) MAX_RX_DESC_CNT; i++ ) {
 		rxbd = &rxr->desc[i];
 		rxbd->flags = RX_BD_FLAGS_START | RX_BD_FLAGS_END;
 		rxbd->len = RX_BUF_USE_SIZE;
@@ -530,15 +532,6 @@ static void bnx2_init_rx_ring ( struct bnx2_nic *bnx2 ) {
 	rxbd->haddr_lo = ( uint64_t ) virt_to_bus ( rxr->desc ) & 0xffffffff;
 
 	bnx2_init_rx_context ( bnx2 );
-
-	/*
-	rxr->desc[0].haddr_hi = 0;
-	rxr->desc[0].haddr_lo = 0;//virt_to_bus ( rxr->desc );
-	rxr->prod_bseq += RX_BUF_USE_SIZE;
-	rxr->prod = NEXT_RX_BD ( rxr->prod );
-	writew ( rxr->prod, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BDIDX );
-	writel ( rxr->prod_bseq, bnx2->regs + MB_RX_CID_ADDR + BNX2_L2CTX_HOST_BSEQ );
-	*/
 }
 
 static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
@@ -554,16 +547,92 @@ static int bnx2_reset_nic ( struct bnx2_nic *bnx2 ) {
 	return 0;
 }
 
+static void bnx2_setup_copper_phy ( struct bnx2_nic *bnx2 ) {
+	mii_write ( &bnx2->mii, MII_ADVERTISE, ADVERTISE_ALL | ADVERTISE_CSMA );
+	mii_write ( &bnx2->mii, MII_CTRL1000,
+				ADVERTISE_1000HALF | ADVERTISE_1000FULL );
+	mii_write ( &bnx2->mii, MII_BMCR, BMCR_ANRESTART | BMCR_ANENABLE );
+}
+
+static void bnx2_setup_phy ( struct bnx2_nic *bnx2 ) {
+	bnx2_setup_copper_phy ( bnx2 );
+}
+
+static void bnx2_init_phy ( struct bnx2_nic *bnx2 ) {
+	bnx2_setup_phy ( bnx2 );
+}
+
+static void bnx2_set_mac_link ( struct bnx2_nic *bnx2, int speed, int duplex ) {
+	uint32_t emac_mode = readl ( bnx2->regs + BNX2_EMAC_MODE );
+	switch ( speed ) {
+		case SPEED_10:
+			if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5708 )
+				emac_mode |= BNX2_EMAC_MODE_PORT_MII_10;
+
+			/* fall through */
+		case SPEED_100:
+			emac_mode |= BNX2_EMAC_MODE_PORT_MII;
+			break;
+		case SPEED_2500:
+			emac_mode |= BNX2_EMAC_MODE_25G;
+			/* fall through */
+		case SPEED_1000:
+			emac_mode |= BNX2_EMAC_MODE_PORT_GMII;
+			break;
+	}
+	if ( duplex == DUPLEX_HALF )
+		emac_mode |= BNX2_EMAC_MODE_HALF_DUPLEX;
+
+	writel ( emac_mode, bnx2->regs + BNX2_EMAC_MODE );
+}
+
+static void bnx2_copper_linkup ( struct bnx2_nic *bnx2 ) {
+	uint32_t local_adv, remote_adv, common;
+	uint32_t speed = 0, duplex = 0;
+
+	local_adv = mii_read ( &bnx2->mii, MII_CTRL1000 );
+	remote_adv = mii_read ( &bnx2->mii, MII_STAT1000 );
+	common = local_adv & ( remote_adv >> 2 );
+	if ( common & ADVERTISE_1000FULL ) {
+		speed = SPEED_1000;
+		duplex = DUPLEX_FULL;
+	} else if ( common & ADVERTISE_1000HALF ) {
+		speed = SPEED_1000;
+		duplex = DUPLEX_HALF;
+	} else {
+		local_adv = mii_read ( &bnx2->mii, MII_ADVERTISE );
+		remote_adv = mii_read ( &bnx2->mii, MII_LPA );
+		common = local_adv & remote_adv;
+		if ( common & ADVERTISE_100FULL ) {
+			speed = SPEED_100;
+			duplex = DUPLEX_FULL;
+		} else if ( common & ADVERTISE_100HALF ) {
+			speed = SPEED_100;
+			duplex = DUPLEX_HALF;
+		} else if ( common & ADVERTISE_10FULL ) {
+			speed = SPEED_10;
+			duplex = DUPLEX_FULL;
+		} else if ( common & ADVERTISE_10HALF ) {
+			speed = SPEED_10;
+			duplex = DUPLEX_HALF;
+		} else {
+			//fail
+		}
+	}
+	bnx2_set_mac_link ( bnx2, speed, duplex );
+}
+
+static void bnx2_set_link ( struct bnx2_nic *bnx2 ) {
+	bnx2_copper_linkup ( bnx2 );
+}
+
 static int bnx2_init_nic ( struct bnx2_nic *bnx2 ) {
 	int rc;
-	uint32_t value;
 
 	if ( ( rc = bnx2_reset_nic ( bnx2 ) ) != 0 )
 		return rc;
 
-	value = readl ( bnx2->regs + BNX2_EMAC_MODE );
-	value |= BNX2_EMAC_MODE_PORT_GMII;
-	writel ( value, bnx2->regs + BNX2_EMAC_MODE );
+	bnx2_init_phy ( bnx2 );
 	return 0;
 }
 
@@ -709,12 +778,13 @@ static int bnx2_reset ( struct bnx2_nic *bnx2 ) {
  */
 static void bnx2_check_link ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
-	struct status_block *status_blk = bnx2->status_blk;
+	struct bnx2_status_block *status_blk = bnx2->status_blk;
 	uint32_t status_idx = status_blk->status_idx;
 	uint32_t new_link = bnx2->status_blk->status_attn_bits & STATUS_ATTN_BITS_LINK_STATE;
 	uint32_t old_link = bnx2->status_blk->status_attn_bits_ack & STATUS_ATTN_BITS_LINK_STATE;
 	if ( new_link != old_link ) {
 		if ( new_link ) {
+			bnx2_set_link ( bnx2 );
 			writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_PCICFG_STATUS_BIT_SET_CMD );
 			netdev_link_up ( netdev );
 		}
@@ -840,13 +910,11 @@ static void bnx2_poll_tx ( struct net_device *netdev ) {
 static void bnx2_poll_rx ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 	struct bnx2_rx_ring_info *rxr = &bnx2->rx_ring;
-	struct bnx2_rx_bd *rxbd;
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
 	uint32_t length;
 	uint16_t hw_cons = bnx2->status_blk->status_rx_quick_consumer_index0;
 	struct l2_fhdr *hdr;
-	int i;
 
 	rmb();
 	if ( ( hw_cons & MAX_RX_DESC_CNT ) == MAX_RX_DESC_CNT )
@@ -854,7 +922,6 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 
 	while ( rxr->cons != hw_cons ) {
 		rx_idx = ( rxr->cons % RX_DESC_CNT );
-		rxbd = &rxr->desc[rx_idx];
 
 		iobuf = bnx2->rx_iobuf[rx_idx];
 		bnx2->rx_iobuf[rx_idx] = NULL;
@@ -954,13 +1021,11 @@ static int bnx2_probe ( struct pci_device *pci ) {
 	bnx2_set_mac_address ( bnx2, netdev );
 	/* Initialise and reset MII interface */
 	mii_init ( &bnx2->mii, &bnx2_mii_operations );
-	/*
 	if ( ( rc = mii_reset ( &bnx2->mii ) ) != 0 ) {
 		DBGC ( bnx2, "BNX2 %p could not reset MII: %s\n",
 		       bnx2, strerror ( rc ) );
 		goto err_mii_reset;
 	}
-	*/
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
@@ -972,10 +1037,8 @@ static int bnx2_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
-/*
  err_mii_reset:
 	bnx2_reset ( bnx2 );
-*/
  err_reset:
 	netdev_nullify ( netdev );
 	netdev_put ( netdev );
