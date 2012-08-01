@@ -216,6 +216,18 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #define BNX2_CTX_PAGE_TBL								0x0000100c
 
+#define BNX2_CTX_COMMAND								0x00001000
+#define BNX2_CTX_COMMAND_ENABLED						( 1L << 0 )
+#define BNX2_CTX_COMMAND_MEM_INIT						( 1L << 13 )
+
+#define BNX2_CTX_HOST_PAGE_TBL_CTRL						0x000010c8
+#define BNX2_CTX_HOST_PAGE_TBL_CTRL_WRITE_REQ			( 1L << 30 )
+
+#define BNX2_CTX_HOST_PAGE_TBL_DATA0					0x000010cc
+#define BNX2_CTX_HOST_PAGE_TBL_DATA0_VALID				( 1L << 0 )
+
+#define BNX2_CTX_HOST_PAGE_TBL_DATA1					0x000010d0
+
 #define CTX_SHIFT						7
 #define CTX_SIZE						( 1 << CTX_SHIFT )
 #define CTX_MASK						( CTX_SIZE - 1 )
@@ -475,6 +487,9 @@ struct bnx2_nic {
 
 	struct bnx2_tx_ring_info tx_ring;
 	struct bnx2_rx_ring_info rx_ring;
+	
+	void *ctx_blk[4];
+	int ctx_pages;
 
 	uint32_t phy_addr;
 

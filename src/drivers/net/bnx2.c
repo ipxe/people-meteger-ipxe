@@ -119,6 +119,20 @@ static int bnx2_alloc_mem ( struct bnx2_nic *bnx2 ) {
 	memset ( bnx2->status_blk, 0, sizeof ( struct bnx2_status_block ) );
 	memset ( bnx2->tx_ring.desc, 0, sizeof ( struct bnx2_tx_bd ) * TX_DESC_CNT );
 	memset ( bnx2->rx_ring.desc, 0, sizeof ( struct bnx2_rx_bd ) * RX_DESC_CNT );
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		int i;
+		bnx2->ctx_pages = 0x2000 / BCM_PAGE_SIZE;
+		if ( bnx2->ctx_pages == 0 )
+			bnx2->ctx_pages = 1;
+
+		for ( i = 0; i < bnx2->ctx_pages; i++ ) {
+			bnx2->ctx_blk[i] = malloc_dma ( BCM_PAGE_SIZE, BCM_PAGE_SIZE );
+			if ( !bnx2->ctx_blk[i] ) {
+				bnx2_free_mem ( bnx2 );
+				return -ENOMEM;
+			}
+		}
+	}
 	return 0;
 }
 
@@ -129,6 +143,14 @@ static void bnx2_free_mem ( struct bnx2_nic *bnx2 ) {
 	bnx2->tx_ring.desc = NULL;
 	free_dma ( bnx2->rx_ring.desc, sizeof ( struct bnx2_rx_bd ) * RX_DESC_CNT );
 	bnx2->rx_ring.desc = NULL;
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		int i;
+		
+		for ( i = 0; i < bnx2->ctx_pages; i++ ) {
+			free_dma ( bnx2->ctx_blk[i], BCM_PAGE_SIZE );
+			bnx2->ctx_blk[i] = NULL;
+		}
+	}
 }
 
 static int bnx2_fw_sync ( struct bnx2_nic *bnx2, uint32_t message_data ) {
@@ -169,7 +191,7 @@ static void bnx2_context_write ( struct bnx2_nic *bnx2,
 	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
 		int i;
 		writel ( value, bnx2->regs + BNX2_CTX_CTX_DATA );
-		writel ( offset | BNX2_CTX_CTRL_WRITE_REQ, BNX2_CTX_CTRL );
+		writel ( offset | BNX2_CTX_CTRL_WRITE_REQ, bnx2->regs + BNX2_CTX_CTRL );
 		for ( i = 0; i < 5; i++ ) {
 			value = readl ( bnx2->regs + BNX2_CTX_CTRL );
 			if ( ! ( value & BNX2_CTX_CTRL_WRITE_REQ ) )
@@ -184,8 +206,44 @@ static void bnx2_context_write ( struct bnx2_nic *bnx2,
 }
 
 static int bnx2_init_context_5709 ( struct bnx2_nic *bnx2 ) {
-	/* TODO! */
-	( void ) bnx2;
+	uint32_t value;
+	int i;
+
+	value = BNX2_CTX_COMMAND_ENABLED | BNX2_CTX_COMMAND_MEM_INIT |
+			( ( BCM_PAGE_BITS - 8 ) << 16 );
+	writel ( value, bnx2->regs + BNX2_CTX_COMMAND );
+	for ( i = 0; i < 10; i++ ) {
+		value = readl ( bnx2->regs + BNX2_CTX_COMMAND );
+		/* Wait for completion */
+		if ( ! ( value & BNX2_CTX_COMMAND_MEM_INIT ) )
+			break;
+
+		udelay ( 2 );
+	}
+	if ( value & BNX2_CTX_COMMAND_MEM_INIT )
+		return -ETIMEDOUT;
+
+	for ( i = 0; i < bnx2->ctx_pages; i++ ) {
+		int j;
+		memset ( bnx2->ctx_blk[i], 0, BCM_PAGE_SIZE );
+
+		writel ( ( virt_to_bus ( bnx2->ctx_blk[i] ) & 0xffffffff ) |
+					BNX2_CTX_HOST_PAGE_TBL_DATA0_VALID,
+				bnx2->regs + BNX2_CTX_HOST_PAGE_TBL_DATA0 );
+		writel (  ( uint64_t ) ( virt_to_bus ( bnx2->ctx_blk[i] ) ) >> 32,
+				  bnx2->regs + BNX2_CTX_HOST_PAGE_TBL_DATA1 );
+		writel ( i | BNX2_CTX_HOST_PAGE_TBL_CTRL_WRITE_REQ,
+				 bnx2->regs + BNX2_CTX_HOST_PAGE_TBL_CTRL );
+		for ( j = 0; j < 10; j++ ) {
+			value = readl ( bnx2->regs + BNX2_CTX_HOST_PAGE_TBL_CTRL );
+			if ( ! ( value & BNX2_CTX_HOST_PAGE_TBL_CTRL_WRITE_REQ ) )
+				break;
+
+			udelay ( 5 );
+		}
+		if ( value & BNX2_CTX_HOST_PAGE_TBL_CTRL_WRITE_REQ )
+			return -ETIMEDOUT;
+	}
 	return 0;
 }
 
@@ -450,6 +508,12 @@ static int bnx2_init_chip ( struct bnx2_nic *bnx2 ) {
 	writel ( STATUS_ATTN_BITS_LINK_STATE, bnx2->regs + BNX2_HC_ATTN_BITS_ENABLE );
 
 	bnx2_set_rx_mode ( bnx2 );
+
+	if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5709 ) {
+		value = readl ( bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
+		value |= BNX2_MISC_NEW_CORE_CTL_DMA_ENABLE;
+		writel ( value, bnx2->regs + BNX2_MISC_NEW_CORE_CTL );
+	}
 
 	if ( ( rc = bnx2_fw_sync ( bnx2, BNX2_DRV_MSG_DATA_WAIT2 | BNX2_DRV_MSG_CODE_RESET ) ) )
 		return rc;
@@ -1071,6 +1135,7 @@ static void bnx2_remove ( struct pci_device *pci ) {
 /** bnx2 PCI device IDs */
 static struct pci_device_id bnx2_nics[] = {
 	PCI_ROM ( 0x14e4, 0x164c, "bnx2-5708C", "Broadcom NetXtreme II BCM5708C", 0 ),
+	PCI_ROM ( 0x14e4, 0x1639, "bnx2-5709C", "Broadcom NetXtreme II BCM5709C", 0 ),
 };
 
 /** bnx2 PCI driver */
