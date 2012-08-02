@@ -630,7 +630,7 @@ static void bnx2_set_mac_link ( struct bnx2_nic *bnx2, int speed, int duplex ) {
 	uint32_t emac_mode = readl ( bnx2->regs + BNX2_EMAC_MODE );
 	switch ( speed ) {
 		case SPEED_10:
-			if ( CHIP_NUM ( bnx2->misc_id ) == CHIP_NUM_5708 )
+			if ( CHIP_NUM ( bnx2->misc_id ) != CHIP_NUM_5706 )
 				emac_mode |= BNX2_EMAC_MODE_PORT_MII_10;
 
 			/* fall through */
