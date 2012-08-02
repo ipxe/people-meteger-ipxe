@@ -978,7 +978,7 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 	unsigned int rx_idx;
 	uint32_t length;
 	uint16_t hw_cons = bnx2->status_blk->status_rx_quick_consumer_index0;
-	struct l2_fhdr *hdr;
+	struct bnx2_l2_fhdr *hdr;
 
 	rmb();
 	if ( ( hw_cons & MAX_RX_DESC_CNT ) == MAX_RX_DESC_CNT )
@@ -989,9 +989,9 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 
 		iobuf = bnx2->rx_iobuf[rx_idx];
 		bnx2->rx_iobuf[rx_idx] = NULL;
-		hdr = ( struct l2_fhdr * ) iobuf->data;
-		iobuf->data += sizeof ( struct l2_fhdr ) + 2;
-		length = hdr->pkt_len - 4 + sizeof ( struct l2_fhdr ) + 2;
+		hdr = ( struct bnx2_l2_fhdr * ) iobuf->data;
+		iobuf->data += sizeof ( struct bnx2_l2_fhdr ) + 2;
+		length = hdr->pkt_len - 4 + sizeof ( struct bnx2_l2_fhdr ) + 2;
 
 		iob_put ( iobuf, length );
 		if ( hdr->errors )

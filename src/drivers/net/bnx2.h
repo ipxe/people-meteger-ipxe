@@ -408,7 +408,7 @@ struct bnx2_status_block {
 #endif
 };
 
-struct l2_fhdr {
+struct bnx2_l2_fhdr {
 #if __BYTE_ORDER == __BIG_ENDIAN
 	uint16_t errors;
 	uint16_t status;
