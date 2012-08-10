@@ -306,6 +306,7 @@ struct velocity_nic {
 	struct io_buffer *rx_buffs[VELOCITY_RXDESC_NUM];
 	unsigned int rx_prod;
 	unsigned int rx_cons;
+	unsigned int rx_commit;
 
 	struct velocity_descriptor *tx_ring;
 	unsigned int tx_prod;

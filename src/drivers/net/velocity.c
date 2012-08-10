@@ -255,6 +255,7 @@ static int velocity_alloc_rings ( struct velocity_nic *vlc )
 	/* Allocate RX descriptor ring */
 	vlc->rx_prod = 0;
 	vlc->rx_cons = 0;
+	vlc->rx_commit = 0;
 	vlc->rx_ring = malloc_dma ( VELOCITY_RXDESC_SIZE, VELOCITY_RING_ALIGN );
 	if ( ! vlc->rx_ring )
 		return -ENOMEM;
@@ -313,8 +314,14 @@ static int velocity_refill_rx ( struct velocity_nic *vlc )
 			for (j = 0; j < 4; j++) {
 				desc = &vlc->rx_ring[rx_idx - j];
 				desc->des0 = cpu_to_le32 ( VELOCITY_DES0_OWN );
+				vlc->rx_commit += 4;
 			}
 		}
+	}
+
+	if (vlc->rx_commit) {
+		writew ( vlc->rx_commit, vlc->regs + VELOCITY_RXDESC_RESIDUECNT );
+		vlc->rx_commit = 0;
 	}
 
 	if (i > 0)
@@ -365,6 +372,9 @@ static int velocity_open ( struct net_device *netdev ) {
 	    vlc->regs + VELOCITY_CRS0 );
 
 	writeb ( 0xff, vlc->regs + VELOCITY_RCR );
+
+	/* Set initial link state */
+	velocity_check_link ( netdev );
 
 	velocity_autopoll_start ( vlc );
 	
@@ -612,9 +622,6 @@ static int velocity_probe ( struct pci_device *pci ) {
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
-
-	/* Set initial link state */
-	velocity_check_link ( netdev );
 
 	return 0;
 
