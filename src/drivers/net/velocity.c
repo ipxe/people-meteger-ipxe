@@ -546,8 +546,18 @@ static void velocity_poll ( struct net_device *netdev ) {
 static void velocity_irq ( struct net_device *netdev, int enable ) {
 	struct velocity_nic *vlc = netdev->priv;
 
-	DBGC ( vlc, "VELOCITY %p does not yet support interrupts\n", vlc );
-	( void ) enable;
+	DBGC ( vlc, "VELOCITY %p interrupts %s\n", vlc,
+	    enable ? "enable" : "disable" );
+
+	if (enable) {
+		/* Enable interrupts */
+		writeb ( 0xff, vlc->regs + VELOCITY_IMR0 );
+		writeb ( 0xff, vlc->regs + VELOCITY_IMR1 );
+	} else {
+		/* Disable interrupts */
+		writeb ( 0, vlc->regs + VELOCITY_IMR0 );
+		writeb ( 0, vlc->regs + VELOCITY_IMR1 );
+	}
 }
 
 /** Velocity network device operations */
