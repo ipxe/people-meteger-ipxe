@@ -13,28 +13,30 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define	VELOCITY_BAR_SIZE 	256
 
 /** Default timeout */
-#define	VELOCITY_TIMEOUT_US	10000
+#define	VELOCITY_TIMEOUT_US	10 * 1000
 
+/* REV: do we need more than 1? */
 #define	VELOCITY_TX_FRAGS	7
 
 struct velocity_frag {
 	uint32_t	addr;
 	uint32_t	des2;
-};
+} __attribute (( packed )) ;
 
 /** Velocity descriptor format */
 struct velocity_descriptor {
 	uint32_t	des0;
 	uint32_t	des1;
+	/* REV: do we need more than 1? */
 	struct velocity_frag frags[VELOCITY_TX_FRAGS];
-};
+} __attribute (( packed ));
 
 struct velocity_rx_descriptor {
 	uint32_t	des0;
 	uint32_t	des1;
 	uint32_t	addr;
 	uint32_t	des2;
-};
+} __attribute (( packed ));
 
 #define	VELOCITY_DES0_RMBC(_n)	(((_n) >> 16) & 0x1fff)
 #define	VELOCITY_DES0_OWN	(1 << 31)
@@ -66,6 +68,7 @@ struct velocity_rx_descriptor {
 #define	VELOCITY_DES2_SIZE(_n)	(((_n) & 0x1fff) << 16)
 
 /** Descriptor ring sizes */
+/* Hardware Requirement: Must be multiple of 4 */
 #define	VELOCITY_RXDESC_NUM	8
 #define	VELOCITY_RXDESC_SIZE	\
     ( VELOCITY_RXDESC_NUM * sizeof ( struct velocity_rx_descriptor ) )
@@ -76,6 +79,7 @@ struct velocity_rx_descriptor {
 
 #define	VELOCITY_RING_ALIGN	64
 
+/* REV: why not 1518? */
 #define	VELOCITY_RX_MAX_LEN	2048
 
 /** MAC address registers */

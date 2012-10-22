@@ -597,6 +597,8 @@ static int velocity_probe ( struct pci_device *pci ) {
 	vlc = netdev->priv;
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
+
+	/* REV: alloc_etherdev already does that */
 	memset ( vlc, 0, sizeof ( *vlc ) );
 
 	/* Fix up PCI device */

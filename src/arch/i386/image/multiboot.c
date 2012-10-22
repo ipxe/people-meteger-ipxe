@@ -51,7 +51,7 @@ FEATURE ( FEATURE_IMAGE, "MBOOT", DHCP_EB_FEATURE_MULTIBOOT, 1 );
  * physical addressing as per the multiboot specification.
  *
  */
-#define MAX_MODULES 8
+#define MAX_MODULES 32
 
 /**
  * Maximum combined length of command lines
