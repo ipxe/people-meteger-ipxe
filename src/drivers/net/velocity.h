@@ -9,14 +9,11 @@
 
 FILE_LICENCE ( GPL2_OR_LATER );
 
-/** Skeleton BAR size */
+/** Velocity BAR size */
 #define	VELOCITY_BAR_SIZE 	256
 
 /** Default timeout */
 #define	VELOCITY_TIMEOUT_US	10 * 1000
-
-/* REV: do we need more than 1? */
-#define	VELOCITY_TX_FRAGS	7
 
 struct velocity_frag {
 	uint32_t	addr;
@@ -27,8 +24,8 @@ struct velocity_frag {
 struct velocity_descriptor {
 	uint32_t	des0;
 	uint32_t	des1;
-	/* REV: do we need more than 1? */
-	struct velocity_frag frags[VELOCITY_TX_FRAGS];
+	/* The hardware supports up to 7 TX fragments. We only need one. */
+	struct velocity_frag frags[1];
 } __attribute (( packed ));
 
 struct velocity_rx_descriptor {
@@ -53,8 +50,9 @@ struct velocity_rx_descriptor {
 #define	VELOCITY_DES0_OWC	(1 << 5)
 #define	VELOCITY_DES0_COLS	(1 << 4)
 
-#define	VELOCITY_DES1_CMDZ(_n)	(((_n) & 0xf) << 28)
-#define	VELOCITY_DES1_TCPLS	((1 << 24) | (1 << 25))
+/* VELOCITY_DES1_CMDZ in the datasheet */
+#define	VELOCITY_DES1_FRAGS(_n)	(((_n + 1) & 0xf) << 28)
+#define	VELOCITY_DES1_NORM_PKT	((1 << 24) | (1 << 25))
 #define	VELOCITY_DES1_TIC	(1 << 23)
 #define	VELOCITY_DES1_PIC	(1 << 22)
 #define	VELOCITY_DES1_VETAG	(1 << 21)
@@ -79,7 +77,7 @@ struct velocity_rx_descriptor {
 
 #define	VELOCITY_RING_ALIGN	64
 
-/* REV: why not 1518? */
+/* NOTE: why not 1518? */
 #define	VELOCITY_RX_MAX_LEN	2048
 
 /** MAC address registers */
@@ -92,6 +90,8 @@ struct velocity_rx_descriptor {
 
 /** Receive control register */
 #define VELOCITY_RCR		0x06
+
+/* NOTE: Why are rhine definitions in the velocity driver? Those are unused */
 #define	RHINE_RCR_SYMERR_ACCEPT	(1 << 7)	/*< Accept symbol error */
 #define	RHINE_RCR_FILTER_ACCEPT	(1 << 6)	/*< Accept based on filter */
 #define	RHINE_RCR_LONG_ACCEPT	(1 << 5)	/*< Accept long packets */
