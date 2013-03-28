@@ -21,7 +21,7 @@ struct rhine_descriptor {
 	uint32_t	des1;
 	uint32_t	buffer;
 	uint32_t	next;
-};
+} __attribute__ (( packed ));
 
 #define	RHINE_DES0_OWN		(1 << 31)	/*< Owned descriptor */
 #define RHINE_DES1_IC		(1 << 23)	/*< Generate interrupt */
@@ -73,7 +73,7 @@ struct rhine_descriptor {
 #define	RHINE_TXDESC_SIZE	\
     ( RHINE_TXDESC_NUM * sizeof ( struct rhine_descriptor ) )
 
-#define	RHINE_RX_MAX_LEN	2048
+#define	RHINE_RX_MAX_LEN	1536
 
 /** Rhine MAC address registers */
 #define	RHINE_MAC0		0x00
@@ -134,16 +134,16 @@ struct rhine_descriptor {
 #define	RHINE_ISR1_GPI		(1 << 7)
 #define	RHINE_ISR1_PORTSTATE	(1 << 6)
 #define	RHINE_ISR1_TXABORT	(1 << 5)
-#define	RHINE_ISR1_RDRUNNING	(1 << 4)
+#define	RHINE_ISR1_RXNOBUF	(1 << 4)
 #define	RHINE_ISR1_RXFIFOOVFL	(1 << 3)
 #define	RHINE_ISR1_RXFIFOUNFL	(1 << 2)
 #define	RHINE_ISR1_TXFIFOUNFL	(1 << 1)
 #define	RHINE_ISR1_EARLYRX	(1 << 0)
 
-/** Interrupt enable mask 0 */
+/** Interrupt enable mask register 0 */
 #define	RHINE_IMR0		0x0e
 
-/** Interrupt enable mask 1 */
+/** Interrupt enable mask register 1 */
 #define	RHINE_IMR1		0x0f
 
 /** RX queue descriptor base address */
@@ -161,7 +161,7 @@ struct rhine_descriptor {
 #define	RHINE_MII_SR_LINKNWAY	(1 << 4)	/*< Link status after N-Way */
 #define	RHINE_MII_SR_PHYERR	(1 << 3)	/*< PHY device error */
 #define	RHINE_MII_SR_DUPLEX	(1 << 2)	/*< Duplex mode after N-Way */
-#define	RHINE_MII_SR_LINKPOLL	(1 << 1)	/*< Link status after pool */
+#define	RHINE_MII_SR_LINKPOLL	(1 << 1)	/*< Link status after poll */
 #define	RHINE_MII_SR_LINKSPD	(1 << 0)	/*< Link speed after N-Way */
 
 /** MII bus control 0 register */
@@ -194,6 +194,8 @@ struct rhine_descriptor {
 
 /** Chip configuration A */
 #define	RHINE_CHIPCFG_A		0x78
+/* MMIO enable. Only valid for Rhine I. Reserved on later boards */
+#define RHINE_CHIPCFG_A_MMIO	(1 << 5)
 
 /** Chip configuration B */
 #define	RHINE_CHIPCFG_B		0x79
@@ -203,6 +205,10 @@ struct rhine_descriptor {
 
 /** Chip configuration D */
 #define	RHINE_CHIPCFG_D		0x7b
+/* MMIO enable. Only valid on Rhine II and later. GPIOEN on Rhine I */
+#define RHINE_CHIPCFG_D_MMIO	(1 << 7)
+
+#define RHINE_REVISION_OLD	0x20
 
 /** A VIA Rhine network card */
 struct rhine_nic {
