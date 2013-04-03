@@ -122,19 +122,24 @@ static struct mii_operations rhine_mii_operations = {
 /**
  * Reset hardware
  *
+ * We're using PIO because this might reset the MMIO enable bit.
+ *
  * @v rhn		Rhine device
+ * @v ioaddr		PIO address
  * @ret rc		Return status code
  */
-static int rhine_reset ( struct rhine_nic *rhn ) {
+static int rhine_reset ( struct rhine_nic *rhn, unsigned long ioaddr ) {
 	int timeout = RHINE_TIMEOUT_US;
+	uint8_t cr1;
 
 	DBGC ( rhn, "RHINE %p reset\n", rhn );
 
-	rhine_setbit ( rhn->regs + RHINE_CR1, RHINE_CR1_RESET );
+	cr1 = inb ( ioaddr + RHINE_CR1 );
+	outb ( cr1 | RHINE_CR1_RESET, ioaddr + RHINE_CR1 );
 
 	while ( timeout-- ) {
 		udelay ( 1 );
-		if ( ( readb ( rhn->regs + RHINE_CR1 ) & RHINE_CR1_RESET ) == 0 )
+		if ( ( inb ( ioaddr + RHINE_CR1 ) & RHINE_CR1_RESET ) == 0 )
 			return 0;
 	}
 
@@ -163,17 +168,24 @@ static void rhine_enable_mmio ( unsigned long ioaddr, int revision ) {
 /**
  * Reload EEPROM contents
  *
+ * We're using PIO because this might reset the MMIO enable bit.
+ *
  * @v rhn		Rhine device
+ * @v ioaddr		PIO address
  */
-static int rhine_reload_eeprom ( struct rhine_nic *rhn ) {
+static int rhine_reload_eeprom ( struct rhine_nic *rhn, unsigned long ioaddr ) {
 	int timeout = RHINE_TIMEOUT_US;
+	uint8_t eeprom;
 
-	rhine_setbit( rhn->regs + RHINE_EEPROM_CTRL, RHINE_EEPROM_CTRL_RELOAD );
+	eeprom = inb ( ioaddr + RHINE_EEPROM_CTRL );
+
+	/* set EEPROM Reload bit */
+	outb ( eeprom | RHINE_EEPROM_CTRL_RELOAD, ioaddr + RHINE_EEPROM_CTRL );
 
 	while ( timeout-- ) {
 		udelay ( 1 );
-		if ( ( readb ( rhn->regs + RHINE_EEPROM_CTRL )
-		    & RHINE_EEPROM_CTRL_RELOAD ) == 0 )
+		if ( ( inb ( ioaddr + RHINE_EEPROM_CTRL )
+		           & RHINE_EEPROM_CTRL_RELOAD ) == 0 )
 			return 0;
 	}
 
@@ -571,22 +583,23 @@ static int rhine_probe ( struct pci_device *pci ) {
 	pci_read_config_byte ( pci, PCI_REVISION, &revision );
 	DBGC2 ( rhn, "RHINE %p Revision %#02x detected\n", rhn, revision );
 
-	/* Enable MMIO access */
-	rhine_enable_mmio ( pci->ioaddr, revision );
-
 	/* Map registers */
 	rhn->netdev = netdev;
 	rhn->regs = ioremap ( pci->membase, RHINE_BAR_SIZE );
 
 	/* Reset the NIC */
-	if ( ( rc = rhine_reset ( rhn ) ) != 0 )
+	if ( ( rc = rhine_reset ( rhn, pci->ioaddr ) ) != 0 ) {
+		DBGC ( rhn, "RHINE %p reset failed\n", rhn );
 		goto err_reset;
+	}
 
 	/* Reload EEPROM */
-	if ( ( rc = rhine_reload_eeprom ( rhn ) ) != 0 )
+	if ( ( rc = rhine_reload_eeprom ( rhn, pci->ioaddr ) ) != 0 ) {
+		DBGC ( rhn, "RHINE %p EEPROM reload failed\n", rhn );
 		goto err_reset;
+	}
 
-	/* Reloading EEPROM might reset ConfigD. Enable MMIO again */
+	/* Enable MMIO */
 	rhine_enable_mmio ( pci->ioaddr, revision );
 
 	netdev->hw_addr[0] = readb ( rhn->regs + RHINE_MAC0 );
@@ -620,7 +633,7 @@ static int rhine_probe ( struct pci_device *pci ) {
 
  err_register_netdev:
  err_mii_reset:
-	rhine_reset ( rhn );
+	rhine_reset ( rhn, pci->ioaddr );
  err_reset:
 	netdev_nullify ( netdev );
 	netdev_put ( netdev );
@@ -641,7 +654,7 @@ static void rhine_remove ( struct pci_device *pci ) {
 	unregister_netdev ( netdev );
 
 	/* Reset card */
-	rhine_reset ( nic );
+	rhine_reset ( nic, pci->ioaddr );
 
 	/* Free network device */
 	netdev_nullify ( netdev );

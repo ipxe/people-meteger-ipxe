@@ -190,7 +190,7 @@ struct rhine_descriptor {
 /** EERPOM control/status register */
 #define	RHINE_EEPROM_CTRL	0x74
 #define	RHINE_EEPROM_CTRL_STATUS	(1 << 7) /*< EEPROM status */
-#define	RHINE_EEPROM_CTRL_RELOAD	(1 << 6) /*< EEPROM reload */
+#define	RHINE_EEPROM_CTRL_RELOAD	(1 << 5) /*< EEPROM reload */
 
 /** Chip configuration A */
 #define	RHINE_CHIPCFG_A		0x78
