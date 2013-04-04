@@ -418,9 +418,9 @@ static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf )
 	desc = &rhn->tx_ring[tx_idx];
 	desc->buffer = cpu_to_le32 ( virt_to_bus ( iobuf->data ) );
 	desc->des1 = cpu_to_le32 ( RHINE_DES1_IC | RHINE_TDES1_STP
-	    | RHINE_TDES1_EDP | RHINE_DES1_CHAIN 
+	    | RHINE_TDES1_EDP | RHINE_DES1_CHAIN
 	    | RHINE_DES1_SIZE ( iob_len ( iobuf ) ) );
-	
+
 	DBGC2 ( rhn, "RHINE %p tx_prod=%d desc=%p iobuf=%p len=%d\n",
 	        rhn, tx_idx, desc, iobuf->data, iob_len ( iobuf ) );
 
@@ -428,7 +428,7 @@ static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf )
 	rhine_setbit ( rhn->regs + RHINE_CR1, RHINE_CR1_TXPOLL );
 	return 0;
 }
- 
+
 static void rhine_poll_rx ( struct rhine_nic *rhn ) {
 	struct rhine_descriptor *desc;
 	struct io_buffer *iobuf;
@@ -445,9 +445,10 @@ static void rhine_poll_rx ( struct rhine_nic *rhn ) {
 		    rhn, rx_idx, rhn->rx_prod % RHINE_RXDESC_NUM);
 
 		iobuf = rhn->rx_buffs[rx_idx];
-		
-		iob_put ( iobuf, ( RHINE_DES0_GETSIZE (
-		    le32_to_cpu ( desc->des0 ) ) ) );
+
+		/* Set packet length, strip CRC field */
+		iob_put ( iobuf, RHINE_DES0_GETSIZE (
+					le32_to_cpu ( desc->des0 ) ) - 4 );
 
 		if ( ! ( le32_to_cpu ( desc->des0 ) & RHINE_RDES0_RXOK ) )
 			netdev_rx_err ( rhn->netdev, iobuf, -EIO);
