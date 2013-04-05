@@ -35,6 +35,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #define	rhine_setbit(_reg, _mask)	writeb ( readb ( _reg ) | _mask, _reg )
 
+#define virt_to_le32bus(_adr)	cpu_to_le32 ( virt_to_bus ( _adr ) )
+
 /** @file
  *
  * VIA Rhine network driver
@@ -61,12 +63,12 @@ static int rhine_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 
 	DBGC2 ( rhn, "RHINE %p MII read reg %d\n", rhn, reg );
 
-	writeb ( reg, rhn->regs + RHINE_MII_PA );
+	writeb ( reg, rhn->regs + RHINE_MII_ADDR );
 	rhine_setbit( rhn->regs + RHINE_MII_CR, RHINE_MII_CR_RDEN );
 
 	while ( timeout-- ) {
 		udelay ( 1 );
-		if ( (readb ( rhn->regs + RHINE_MII_CR )
+		if ( ( readb ( rhn->regs + RHINE_MII_CR )
 		          & RHINE_MII_CR_RDEN ) == 0 )
 			return readw ( rhn->regs + RHINE_MII_RDWR );
 	}
@@ -91,7 +93,7 @@ static int rhine_mii_write ( struct mii_interface *mii, unsigned int reg,
 	DBGC2 ( rhn, "RHINE %p MII write reg %d data 0x%04x\n",
 	        rhn, reg, data );
 
-	writeb ( reg, rhn->regs + RHINE_MII_PA );
+	writeb ( reg, rhn->regs + RHINE_MII_ADDR );
 	writew ( data, rhn->regs + RHINE_MII_RDWR );
 	rhine_setbit ( rhn->regs + RHINE_MII_CR, RHINE_MII_CR_WREN );
 
@@ -232,41 +234,47 @@ static int rhine_alloc_rings ( struct rhine_nic *rhn )
 	rhn->rx_prod = 0;
 	rhn->rx_cons = 0;
 	rhn->rx_ring = malloc_dma ( RHINE_RXDESC_SIZE, RHINE_RING_ALIGN );
-	if ( ! rhn->rx_ring )
+	if ( ! rhn->rx_ring ) {
+		DBGC ( rhn, "RHINE %p failed to allocate RX ring\n", rhn );
 		return -ENOMEM;
+	}
 
 	memset ( rhn->rx_ring, 0, RHINE_RXDESC_SIZE );
 
 	for ( i = 0; i < RHINE_RXDESC_NUM; i++ )
-		rhn->rx_ring[i].next = virt_to_bus( 
-		    &rhn->rx_ring[ (i + 1) % RHINE_RXDESC_NUM] );
+		rhn->rx_ring[i].next = virt_to_le32bus (
+		    &rhn->rx_ring[(i + 1) % RHINE_RXDESC_NUM] );
 
-	DBGC ( rhn, "RHINE %p RX ring start address: %p\n", rhn, rhn->rx_ring );
+	DBGC2 ( rhn, "RHINE %p RX ring start address: %p\n", rhn, rhn->rx_ring );
 
 	/* Allocate TX descriptor ring */
 	rhn->tx_prod = 0;
 	rhn->tx_cons = 0;
 	rhn->tx_ring = malloc_dma ( RHINE_TXDESC_SIZE, RHINE_RING_ALIGN );
-	if ( ! rhn->tx_ring )
+	if ( ! rhn->tx_ring ) {
+		DBGC ( rhn, "RHINE %p failed to allocate TX ring\n", rhn );
 		goto err_tx_ring_alloc;
+	}
 
 	memset ( rhn->tx_ring, 0, RHINE_TXDESC_SIZE );
 
 	for ( i = 0; i < RHINE_TXDESC_NUM; i++ )
-		rhn->tx_ring[i].next = virt_to_bus (
-		    &rhn->tx_ring[ (i + 1) % RHINE_TXDESC_NUM] );
+		rhn->tx_ring[i].next = virt_to_le32bus (
+		    &rhn->tx_ring[(i + 1) % RHINE_TXDESC_NUM] );
 
-	DBGC ( rhn, "RHINE %p TX ring start address: %p\n", rhn, rhn->tx_ring );
+	DBGC2 ( rhn, "RHINE %p TX ring start address: %p\n", rhn, rhn->tx_ring );
 
 	/* Program TX and RX ring start address */
-	writel ( virt_to_bus ( rhn->tx_ring ), rhn->regs + RHINE_TXQUEUE_BASE );
-	writel ( virt_to_bus ( rhn->rx_ring ), rhn->regs + RHINE_RXQUEUE_BASE );
+	writel ( virt_to_le32bus ( rhn->tx_ring ),
+	         rhn->regs + RHINE_TXQUEUE_BASE );
+	writel ( virt_to_le32bus ( rhn->rx_ring ),
+	         rhn->regs + RHINE_RXQUEUE_BASE );
 
 	return 0;
 
 err_tx_ring_alloc:
 	free_dma ( rhn->rx_ring, RHINE_RXDESC_SIZE );
-	return -ENOMEM;	
+	return -ENOMEM;
 }
 
 static void rhine_refill_rx ( struct rhine_nic *rhn )
@@ -284,10 +292,12 @@ static void rhine_refill_rx ( struct rhine_nic *rhn )
 
 		rx_idx = ( rhn->rx_prod++ % RHINE_RXDESC_NUM );
 		desc = &rhn->rx_ring[rx_idx];
-		desc->buffer = virt_to_bus ( iobuf->data );
-		desc->des1 = cpu_to_le32 ( RHINE_DES1_SIZE ( 
-		    RHINE_RX_MAX_LEN - 1 ) | RHINE_DES1_CHAIN | 
+		desc->buffer = virt_to_le32bus ( iobuf->data );
+		desc->des1 = cpu_to_le32 ( RHINE_DES1_SIZE (
+		    RHINE_RX_MAX_LEN - 1 ) | RHINE_DES1_CHAIN |
 		    RHINE_DES1_IC );
+
+		wmb();
 		desc->des0 = cpu_to_le32 ( RHINE_DES0_OWN );
 
 		rhn->rx_buffs[rx_idx] = iobuf;
@@ -308,8 +318,7 @@ static int rhine_open ( struct net_device *netdev ) {
 	int timeout = RHINE_TIMEOUT_US;
 	int rc;
 
-	DBGC ( rhn, "RHINE %p open\n", rhn );
-	DBGC ( rhn, "RHINE %p regs at: %p\n", rhn, rhn->regs );
+	DBGC2 ( rhn, "RHINE %p regs at: %p\n", rhn, rhn->regs );
 
 	if ( ( rc = rhine_alloc_rings ( rhn ) ) != 0 )
 		return rc;
@@ -318,14 +327,14 @@ static int rhine_open ( struct net_device *netdev ) {
 	    RHINE_RCR_RUNT_ACCEPT, rhn->regs + RHINE_RCR );
 
 	/* Enable link status monitoring */
-	writeb ( MII_BMSR, rhn->regs + RHINE_MII_PA );
+	writeb ( MII_BMSR, rhn->regs + RHINE_MII_ADDR );
 	writeb ( RHINE_MII_CR_AUTOPOLL, rhn->regs + RHINE_MII_CR );
 
 	/* Wait for MDIO auto-poll to complete */
 	while ( timeout-- ) {
 		udelay ( 1 );
-		if ( ( readb ( rhn->regs + RHINE_MII_PA )
-		               & RHINE_MII_PA_MDONE ) == 0 )
+		if ( ( readb ( rhn->regs + RHINE_MII_ADDR )
+		               & RHINE_MII_ADDR_MDONE ) == 0 )
 			break;
 	}
 
@@ -334,7 +343,7 @@ static int rhine_open ( struct net_device *netdev ) {
 		return -ETIMEDOUT;
 	}
 
-	writeb ( MII_BMSR | RHINE_MII_PA_STATUS, rhn->regs + RHINE_MII_PA );
+	writeb ( MII_BMSR | RHINE_MII_ADDR_MSRCEN, rhn->regs + RHINE_MII_ADDR );
 
 	/* Some cards need an extra delay(observed with VT6102) */
 	mdelay ( 10 );
@@ -407,16 +416,22 @@ static void rhine_close ( struct net_device *netdev ) {
  * @v iobuf		I/O buffer
  * @ret rc		Return status code
  */
-static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
+static int rhine_transmit ( struct net_device *netdev,
+                            struct io_buffer *iobuf ) {
 	struct rhine_nic *rhn = netdev->priv;
 	struct rhine_descriptor *desc;
 	int tx_idx;
+
+	if ( ( rhn->tx_prod - rhn->tx_cons ) >= RHINE_TXDESC_NUM ) {
+		DBGC ( rhn, "RHINE %p out of TX buffers\n", rhn );
+		return -ENOBUFS;
+	}
 
 	iob_pad ( iobuf, ETH_ZLEN );
 
 	tx_idx = ( rhn->tx_prod++ % RHINE_TXDESC_NUM );
 	desc = &rhn->tx_ring[tx_idx];
-	desc->buffer = cpu_to_le32 ( virt_to_bus ( iobuf->data ) );
+	desc->buffer = virt_to_le32bus ( iobuf->data );
 	desc->des1 = cpu_to_le32 ( RHINE_DES1_IC | RHINE_TDES1_STP
 	    | RHINE_TDES1_EDP | RHINE_DES1_CHAIN
 	    | RHINE_DES1_SIZE ( iob_len ( iobuf ) ) );
@@ -424,6 +439,8 @@ static int rhine_transmit ( struct net_device *netdev, struct io_buffer *iobuf )
 	DBGC2 ( rhn, "RHINE %p tx_prod=%d desc=%p iobuf=%p len=%d\n",
 	        rhn, tx_idx, desc, iobuf->data, iob_len ( iobuf ) );
 
+	/* Card will auto-poll descriptor. Hence wmb() before setting OWN bit */
+	wmb();
 	desc->des0 = cpu_to_le32 ( RHINE_DES0_OWN );
 	rhine_setbit ( rhn->regs + RHINE_CR1, RHINE_CR1_TXPOLL );
 	return 0;
@@ -448,7 +465,7 @@ static void rhine_poll_rx ( struct rhine_nic *rhn ) {
 
 		/* Set packet length, strip CRC field */
 		iob_put ( iobuf, RHINE_DES0_GETSIZE (
-					le32_to_cpu ( desc->des0 ) ) - 4 );
+		          le32_to_cpu ( desc->des0 ) ) - 4 );
 
 		if ( ! ( le32_to_cpu ( desc->des0 ) & RHINE_RDES0_RXOK ) )
 			netdev_rx_err ( rhn->netdev, iobuf, -EIO);
@@ -466,12 +483,12 @@ static void rhine_poll_tx ( struct rhine_nic *rhn ) {
 	while ( rhn->tx_cons != rhn->tx_prod ) {
 		tx_idx = ( rhn->tx_cons % RHINE_TXDESC_NUM );
 		desc = &rhn->tx_ring[tx_idx];
-		
+
 		if ( le32_to_cpu ( desc->des0 ) & RHINE_DES0_OWN )
 			return;
 
 		netdev_tx_complete_next ( rhn->netdev );
-	
+
 		DBGC2 ( rhn, "RHINE %p poll_tx cons=%d prod=%d tsr=%04x\n",
 		    rhn, tx_idx, rhn->tx_prod % RHINE_TXDESC_NUM, desc->des0 );
 		rhn->tx_cons++;
@@ -504,10 +521,10 @@ static void rhine_poll ( struct net_device *netdev ) {
 	if ( isr1 & RHINE_ISR1_RXNOBUF )
 		rhine_poll_rx ( rhn );
 
-	if ( isr0 & RHINE_ISR0_RXRINGERR)
+	if ( isr0 & RHINE_ISR0_RXRINGERR )
 		DBGC ( rhn, "RHINE %p RXRINGERR interrupt\n", rhn );
 
-	if ( isr1 & RHINE_ISR1_PORTSTATE)
+	if ( isr1 & RHINE_ISR1_PORTSTATE )
 		rhine_check_link ( netdev );
 
 	rhine_refill_rx ( rhn );
@@ -521,9 +538,6 @@ static void rhine_poll ( struct net_device *netdev ) {
  */
 static void rhine_irq ( struct net_device *netdev, int enable ) {
 	struct rhine_nic *nic = netdev->priv;
-
-	DBGC ( nic, "RHINE %p interrupts %s\n", nic,
-	    enable ? "enable" : "disable");
 
 	if (enable) {
 		/* Enable interrupts */

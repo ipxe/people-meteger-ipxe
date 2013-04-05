@@ -179,10 +179,9 @@ struct rhine_descriptor {
 #define	RHINE_MII_CR_MDIOOUT	(1 << 3)	/*< MDIO output enable */
 
 /** MII port address */
-#define	RHINE_MII_PA		0x71
-#define	RHINE_MII_PA_IDLE	(1 << 7)
-#define	RHINE_MII_PA_STATUS	(1 << 6)
-#define	RHINE_MII_PA_MDONE	(1 << 5)
+#define	RHINE_MII_ADDR		0x71
+#define	RHINE_MII_ADDR_MSRCEN	(1 << 6)
+#define	RHINE_MII_ADDR_MDONE	(1 << 5)
 
 /** MII read/write data */
 #define	RHINE_MII_RDWR		0x72
