@@ -113,8 +113,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_sundance	     ( ERRFILE_DRIVER | 0x00410000 )
 #define ERRFILE_tlan		     ( ERRFILE_DRIVER | 0x00420000 )
 #define ERRFILE_tulip		     ( ERRFILE_DRIVER | 0x00430000 )
-#define ERRFILE_via_rhine	     ( ERRFILE_DRIVER | 0x00440000 )
-#define ERRFILE_via_velocity	     ( ERRFILE_DRIVER | 0x00450000 )
+#define ERRFILE_rhine		     ( ERRFILE_DRIVER | 0x00440000 )
+#define ERRFILE_velocity	     ( ERRFILE_DRIVER | 0x00450000 )
 #define ERRFILE_w89c840		     ( ERRFILE_DRIVER | 0x00460000 )
 #define ERRFILE_ipoib		     ( ERRFILE_DRIVER | 0x00470000 )
 #define ERRFILE_e1000_main	     ( ERRFILE_DRIVER | 0x00480000 )
@@ -275,6 +275,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_efi_init	      ( ERRFILE_OTHER | 0x00390000 )
 #define ERRFILE_efi_timer	      ( ERRFILE_OTHER | 0x003a0000 )
 #define ERRFILE_efi_umalloc	      ( ERRFILE_OTHER | 0x003b0000 )
+#define ERRFILE_linux_pci	      ( ERRFILE_OTHER | 0x003c0000 )
+#define ERRFILE_pci_settings	      ( ERRFILE_OTHER | 0x003d0000 )
 
 /** @} */
 

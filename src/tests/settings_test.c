@@ -51,9 +51,15 @@ FILE_LICENCE ( GPL2_OR_LATER );
 	ok ( storef_setting ( settings, setting, formatted ) == 0 );	\
 	len = fetch_setting ( settings, setting, actual,		\
 			      sizeof ( actual ) );			\
-	DBGC ( settings, "Stored %s \"%s\", got:\n",			\
-	       (setting)->type->name, formatted );			\
-	DBGC_HDA ( settings, 0, actual, len );				\
+	if ( len >= 0 ) {						\
+		DBGC ( settings, "Stored %s \"%s\", got:\n",		\
+		       (setting)->type->name, formatted );		\
+		DBGC_HDA ( settings, 0, actual, len );			\
+	} else {							\
+		DBGC ( settings, "Stored %s \"%s\", got error %s\n",	\
+		       (setting)->type->name, formatted,		\
+		       strerror ( len ) );				\
+	}								\
 	ok ( len == ( int ) sizeof ( actual ) );			\
 	ok ( memcmp ( actual, expected, sizeof ( actual ) ) == 0 );	\
 	} while ( 0 )
@@ -164,10 +170,22 @@ static struct setting test_hexhyp_setting = {
 	.type = &setting_type_hexhyp,
 };
 
+/** Test raw hex string setting type */
+static struct setting test_hexraw_setting = {
+	.name = "test_hexraw",
+	.type = &setting_type_hexraw,
+};
+
 /** Test UUID setting type */
 static struct setting test_uuid_setting = {
 	.name = "test_uuid",
 	.type = &setting_type_uuid,
+};
+
+/** Test PCI bus:dev.fn setting type */
+static struct setting test_busdevfn_setting = {
+	.name = "test_busdevfn",
+	.type = &setting_type_busdevfn,
 };
 
 /**
@@ -240,10 +258,6 @@ static void settings_test_exec ( void ) {
 
 	/* "hex" setting type */
 	storef_ok ( &test_settings, &test_hex_setting,
-		    ":", RAW ( 0x00, 0x00 ) );
-	storef_ok ( &test_settings, &test_hex_setting,
-		    "1:2:", RAW ( 0x01, 0x02, 0x00 ) );
-	storef_ok ( &test_settings, &test_hex_setting,
 		    "08:12:f5:22:90:1b:4b:47:a8:30:cb:4d:67:4c:d6:76",
 		    RAW ( 0x08, 0x12, 0xf5, 0x22, 0x90, 0x1b, 0x4b, 0x47, 0xa8,
 			  0x30, 0xcb, 0x4d, 0x67, 0x4c, 0xd6, 0x76 ) );
@@ -260,11 +274,23 @@ static void settings_test_exec ( void ) {
 			  0x09, 0x6c, 0x66, 0x13, 0xc1, 0xa8, 0xec, 0x27 ),
 		    "9f-e5-6d-fb-24-3a-4c-bb-a9-09-6c-66-13-c1-a8-ec-27" );
 
+	/* "hexraw" setting type */
+	storef_ok ( &test_settings, &test_hexraw_setting,
+		    "012345abcdef", RAW ( 0x01, 0x23, 0x45, 0xab, 0xcd, 0xef ));
+	fetchf_ok ( &test_settings, &test_hexraw_setting,
+		    RAW ( 0x9e, 0x4b, 0x6e, 0xef, 0x36, 0xb6, 0x46, 0xfe, 0x8f,
+			  0x17, 0x06, 0x39, 0x6b, 0xf4, 0x48, 0x4e ),
+		    "9e4b6eef36b646fe8f1706396bf4484e" );
+
 	/* "uuid" setting type (no store capability) */
 	fetchf_ok ( &test_settings, &test_uuid_setting,
 		    RAW ( 0x1a, 0x6a, 0x74, 0x9d, 0x0e, 0xda, 0x46, 0x1a,0xa8,
 			  0x7a, 0x7c, 0xfe, 0x4f, 0xca, 0x4a, 0x57 ),
 		    "1a6a749d-0eda-461a-a87a-7cfe4fca4a57" );
+
+	/* "busdevfn" setting type (no store capability) */
+	fetchf_ok ( &test_settings, &test_busdevfn_setting,
+		    RAW ( 0x03, 0x45 ), "03:08.5" );
 
 	/* Clear and unregister test settings block */
 	clear_settings ( &test_settings );

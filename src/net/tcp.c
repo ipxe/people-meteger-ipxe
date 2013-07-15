@@ -1216,9 +1216,8 @@ static int tcp_rx ( struct io_buffer *iobuf,
 	tcp_dump_flags ( tcp, tcphdr->flags );
 	DBGC2 ( tcp, "\n" );
 
-	/* If no connection was found, send RST */
+	/* If no connection was found, silently drop packet */
 	if ( ! tcp ) {
-		tcp_xmit_reset ( tcp, st_src, tcphdr );
 		rc = -ENOTCONN;
 		goto discard;
 	}

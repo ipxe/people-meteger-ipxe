@@ -77,6 +77,12 @@ struct setting {
 
 /** Settings block operations */
 struct settings_operations {
+	/** Redirect to underlying settings block (if applicable)
+	 *
+	 * @v settings		Settings block
+	 * @ret settings	Underlying settings block
+	 */
+	struct settings * ( * redirect ) ( struct settings *settings );
 	/** Check applicability of setting
 	 *
 	 * @v settings		Settings block
@@ -248,6 +254,7 @@ extern int register_settings ( struct settings *settings,
 			       struct settings *parent, const char *name );
 extern void unregister_settings ( struct settings *settings );
 
+extern struct settings * settings_target ( struct settings *settings );
 extern int setting_applies ( struct settings *settings,
 			     struct setting *setting );
 extern int store_setting ( struct settings *settings, struct setting *setting,
@@ -322,7 +329,9 @@ extern struct setting_type setting_type_uint16 __setting_type;
 extern struct setting_type setting_type_uint32 __setting_type;
 extern struct setting_type setting_type_hex __setting_type;
 extern struct setting_type setting_type_hexhyp __setting_type;
+extern struct setting_type setting_type_hexraw __setting_type;
 extern struct setting_type setting_type_uuid __setting_type;
+extern struct setting_type setting_type_busdevfn __setting_type;
 
 extern struct setting ip_setting __setting ( SETTING_IPv4 );
 extern struct setting netmask_setting __setting ( SETTING_IPv4 );

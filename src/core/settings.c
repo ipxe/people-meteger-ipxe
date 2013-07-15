@@ -32,7 +32,10 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/dhcp.h>
 #include <ipxe/uuid.h>
 #include <ipxe/uri.h>
+#include <ipxe/base16.h>
+#include <ipxe/pci.h>
 #include <ipxe/init.h>
+#include <ipxe/version.h>
 #include <ipxe/settings.h>
 
 /** @file
@@ -269,6 +272,9 @@ struct settings * find_child_settings ( struct settings *parent,
 					const char *name ) {
 	struct settings *settings;
 
+	/* Find target parent settings block */
+	parent = settings_target ( parent );
+
 	/* Treat empty name as meaning "this block" */
 	if ( ! *name )
 		return parent;
@@ -276,7 +282,7 @@ struct settings * find_child_settings ( struct settings *parent,
 	/* Look for child with matching name */
 	list_for_each_entry ( settings, &parent->children, siblings ) {
 		if ( strcmp ( settings->name, name ) == 0 )
-			return settings;
+			return settings_target ( settings );
 	}
 
 	return NULL;
@@ -296,6 +302,9 @@ static struct settings * autovivify_child_settings ( struct settings *parent,
 		char name[ strlen ( name ) + 1 /* NUL */ ];
 	} *new_child;
 	struct settings *settings;
+
+	/* Find target parent settings block */
+	parent = settings_target ( parent );
 
 	/* Return existing settings, if existent */
 	if ( ( settings = find_child_settings ( parent, name ) ) != NULL )
@@ -328,6 +337,10 @@ const char * settings_name ( struct settings *settings ) {
 	static char buf[16];
 	char tmp[ sizeof ( buf ) ];
 
+	/* Find target settings block */
+	settings = settings_target ( settings );
+
+	/* Construct name */
 	for ( buf[2] = buf[0] = 0 ; settings ; settings = settings->parent ) {
 		memcpy ( tmp, buf, sizeof ( tmp ) );
 		snprintf ( buf, sizeof ( buf ), ".%s%s", settings->name, tmp );
@@ -357,20 +370,11 @@ parse_settings_name ( const char *name,
 
 	/* Parse each name component in turn */
 	while ( remainder ) {
-		struct net_device *netdev;
-
 		subname = remainder;
 		remainder = strchr ( subname, '.' );
 		if ( remainder )
 			*(remainder++) = '\0';
-
-		/* Special case "netX" root settings block */
-		if ( ( subname == name_copy ) && ! strcmp ( subname, "netX" ) &&
-		     ( ( netdev = last_opened_netdev() ) != NULL ) )
-			settings = get_child ( settings, netdev->name );
-		else
-			settings = get_child ( settings, subname );
-
+		settings = get_child ( settings, subname );
 		if ( ! settings )
 			break;
 	}
@@ -458,10 +462,11 @@ int register_settings ( struct settings *settings, struct settings *parent,
 			const char *name ) {
 	struct settings *old_settings;
 
-	/* NULL parent => add to settings root */
+	/* Sanity check */
 	assert ( settings != NULL );
-	if ( parent == NULL )
-		parent = &settings_root;
+
+	/* Find target parent settings block */
+	parent = settings_target ( parent );
 
 	/* Apply settings block name */
 	settings->name = name;
@@ -522,6 +527,26 @@ void unregister_settings ( struct settings *settings ) {
  */
 
 /**
+ * Redirect to target settings block
+ *
+ * @v settings		Settings block, or NULL
+ * @ret settings	Underlying settings block
+ */
+struct settings * settings_target ( struct settings *settings ) {
+
+	/* NULL settings implies the global settings root */
+	if ( ! settings )
+		settings = &settings_root;
+
+	/* Redirect to underlying settings block, if applicable */
+	if ( settings->op->redirect )
+		return settings->op->redirect ( settings );
+
+	/* Otherwise, return this settings block */
+	return settings;
+}
+
+/**
  * Check applicability of setting
  *
  * @v settings		Settings block
@@ -530,6 +555,10 @@ void unregister_settings ( struct settings *settings ) {
  */
 int setting_applies ( struct settings *settings, struct setting *setting ) {
 
+	/* Find target settings block */
+	settings = settings_target ( settings );
+
+	/* Check applicability of setting */
 	return ( settings->op->applies ?
 		 settings->op->applies ( settings, setting ) : 1 );
 }
@@ -547,9 +576,8 @@ int store_setting ( struct settings *settings, struct setting *setting,
 		    const void *data, size_t len ) {
 	int rc;
 
-	/* NULL settings implies storing into the global settings root */
-	if ( ! settings )
-		settings = &settings_root;
+	/* Find target settings block */
+	settings = settings_target ( settings );
 
 	/* Fail if tag does not apply to this settings block */
 	if ( ! setting_applies ( settings, setting ) )
@@ -607,9 +635,8 @@ static int fetch_setting_and_origin ( struct settings *settings,
 	if ( origin )
 		*origin = NULL;
 
-	/* NULL settings implies starting at the global settings root */
-	if ( ! settings )
-		settings = &settings_root;
+	/* Find target settings block */
+	settings = settings_target ( settings );
 
 	/* Sanity check */
 	if ( ! settings->op->fetch )
@@ -969,6 +996,11 @@ int fetch_uuid_setting ( struct settings *settings, struct setting *setting,
  * @v settings		Settings block
  */
 void clear_settings ( struct settings *settings ) {
+
+	/* Find target settings block */
+	settings = settings_target ( settings );
+
+	/* Clear settings, if applicable */
 	if ( settings->op->clear )
 		settings->op->clear ( settings );
 }
@@ -1228,9 +1260,7 @@ int setting_name ( struct settings *settings, struct setting *setting,
 		   char *buf, size_t len ) {
 	const char *name;
 
-	if ( ! settings )
-		settings = &settings_root;
-
+	settings = settings_target ( settings );
 	name = settings_name ( settings );
 	return snprintf ( buf, len, "%s%s%s:%s", name, ( name[0] ? "/" : "" ),
 			  setting->name, setting->type->name );
@@ -1686,37 +1716,6 @@ struct setting_type setting_type_uint32 __setting_type = {
 };
 
 /**
- * Parse hex string setting value
- *
- * @v value		Formatted setting value
- * @v buf		Buffer to contain raw value
- * @v len		Length of buffer
- * @ret len		Length of raw value, or negative error
- */
-static int parse_hex_setting ( const char *value, void *buf, size_t len ) {
-	char *ptr = ( char * ) value;
-	uint8_t *bytes = buf;
-	unsigned int count = 0;
-	uint8_t byte;
-
-	while ( 1 ) {
-		byte = strtoul ( ptr, &ptr, 16 );
-		if ( count++ < len )
-			*bytes++ = byte;
-		switch ( *ptr ) {
-		case '\0' :
-			return count;
-		case ':' :
-		case '-' :
-			ptr++;
-			break;
-		default :
-			return -EINVAL;
-		}
-	}
-}
-
-/**
  * Format hex string setting value
  *
  * @v raw		Raw setting value
@@ -1743,6 +1742,19 @@ static int format_hex_setting ( const void *raw, size_t raw_len, char *buf,
 }
 
 /**
+ * Parse hex string setting value (using colon delimiter)
+ *
+ * @v value		Formatted setting value
+ * @v buf		Buffer to contain raw value
+ * @v len		Length of buffer
+ * @v size		Integer size, in bytes
+ * @ret len		Length of raw value, or negative error
+ */
+static int parse_hex_setting ( const char *value, void *buf, size_t len ) {
+	return hex_decode ( value, ':', buf, len );
+}
+
+/**
  * Format hex string setting value (using colon delimiter)
  *
  * @v raw		Raw setting value
@@ -1754,6 +1766,20 @@ static int format_hex_setting ( const void *raw, size_t raw_len, char *buf,
 static int format_hex_colon_setting ( const void *raw, size_t raw_len,
 				      char *buf, size_t len ) {
 	return format_hex_setting ( raw, raw_len, buf, len, ":" );
+}
+
+/**
+ * Parse hex string setting value (using hyphen delimiter)
+ *
+ * @v value		Formatted setting value
+ * @v buf		Buffer to contain raw value
+ * @v len		Length of buffer
+ * @v size		Integer size, in bytes
+ * @ret len		Length of raw value, or negative error
+ */
+static int parse_hex_hyphen_setting ( const char *value, void *buf,
+				      size_t len ) {
+	return hex_decode ( value, '-', buf, len );
 }
 
 /**
@@ -1770,6 +1796,34 @@ static int format_hex_hyphen_setting ( const void *raw, size_t raw_len,
 	return format_hex_setting ( raw, raw_len, buf, len, "-" );
 }
 
+/**
+ * Parse hex string setting value (using no delimiter)
+ *
+ * @v value		Formatted setting value
+ * @v buf		Buffer to contain raw value
+ * @v len		Length of buffer
+ * @v size		Integer size, in bytes
+ * @ret len		Length of raw value, or negative error
+ */
+static int parse_hex_raw_setting ( const char *value, void *buf,
+				   size_t len ) {
+	return hex_decode ( value, 0, buf, len );
+}
+
+/**
+ * Format hex string setting value (using no delimiter)
+ *
+ * @v raw		Raw setting value
+ * @v raw_len		Length of raw setting value
+ * @v buf		Buffer to contain formatted value
+ * @v len		Length of buffer
+ * @ret len		Length of formatted value, or negative error
+ */
+static int format_hex_raw_setting ( const void *raw, size_t raw_len,
+				    char *buf, size_t len ) {
+	return format_hex_setting ( raw, raw_len, buf, len, "" );
+}
+
 /** A hex-string setting (colon-delimited) */
 struct setting_type setting_type_hex __setting_type = {
 	.name = "hex",
@@ -1780,8 +1834,15 @@ struct setting_type setting_type_hex __setting_type = {
 /** A hex-string setting (hyphen-delimited) */
 struct setting_type setting_type_hexhyp __setting_type = {
 	.name = "hexhyp",
-	.parse = parse_hex_setting,
+	.parse = parse_hex_hyphen_setting,
 	.format = format_hex_hyphen_setting,
+};
+
+/** A hex-string setting (non-delimited) */
+struct setting_type setting_type_hexraw __setting_type = {
+	.name = "hexraw",
+	.parse = parse_hex_raw_setting,
+	.format = format_hex_raw_setting,
 };
 
 /**
@@ -1823,6 +1884,52 @@ struct setting_type setting_type_uuid __setting_type = {
 	.name = "uuid",
 	.parse = parse_uuid_setting,
 	.format = format_uuid_setting,
+};
+
+/**
+ * Parse PCI bus:dev.fn setting value
+ *
+ * @v value		Formatted setting value
+ * @v buf		Buffer to contain raw value
+ * @v len		Length of buffer
+ * @ret len		Length of raw value, or negative error
+ */
+static int parse_busdevfn_setting ( const char *value __unused,
+				    void *buf __unused, size_t len __unused ) {
+	return -ENOTSUP;
+}
+
+/**
+ * Format PCI bus:dev.fn setting value
+ *
+ * @v raw		Raw setting value
+ * @v raw_len		Length of raw setting value
+ * @v buf		Buffer to contain formatted value
+ * @v len		Length of buffer
+ * @ret len		Length of formatted value, or negative error
+ */
+static int format_busdevfn_setting ( const void *raw, size_t raw_len, char *buf,
+				     size_t len ) {
+	signed long dummy;
+	unsigned long busdevfn;
+	int check_len;
+
+	/* Extract numeric value */
+	check_len = numeric_setting_value ( raw, raw_len, &dummy, &busdevfn );
+	if ( check_len < 0 )
+		return check_len;
+	assert ( check_len == ( int ) raw_len );
+
+	/* Format value */
+	return snprintf ( buf, len, "%02lx:%02lx.%lx", PCI_BUS ( busdevfn ),
+			  PCI_SLOT ( busdevfn ), PCI_FUNC ( busdevfn ) );
+}
+
+/** PCI bus:dev.fn setting type */
+struct setting_type setting_type_busdevfn __setting_type = {
+	.name = "busdevfn",
+	.parse = parse_busdevfn_setting,
+	.format = format_busdevfn_setting,
 };
 
 /******************************************************************************
@@ -2070,11 +2177,32 @@ static int platform_fetch ( void *data, size_t len ) {
 	return ( sizeof ( platform ) - 1 /* NUL */ );
 }
 
+/** Version setting */
+struct setting version_setting __setting ( SETTING_MISC ) = {
+	.name = "version",
+	.description = "Version",
+	.type = &setting_type_string,
+	.scope = &builtin_scope,
+};
+
+/**
+ * Fetch version setting
+ *
+ * @v data		Buffer to fill with setting data
+ * @v len		Length of buffer
+ * @ret len		Length of setting data, or negative error
+ */
+static int version_fetch ( void *data, size_t len ) {
+	strncpy ( data, product_version, len );
+	return ( strlen ( product_version ) );
+}
+
 /** List of built-in setting operations */
 static struct builtin_setting_operation builtin_setting_operations[] = {
 	{ &errno_setting, errno_fetch },
 	{ &buildarch_setting, buildarch_fetch },
 	{ &platform_setting, platform_fetch },
+	{ &version_setting, version_fetch },
 };
 
 /**
