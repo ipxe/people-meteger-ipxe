@@ -490,6 +490,7 @@ struct bnx2_nic {
 	
 	void *ctx_blk[4];
 	int ctx_pages;
+	unsigned int old_link;
 
 	uint32_t phy_addr;
 

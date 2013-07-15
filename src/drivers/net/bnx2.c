@@ -1094,11 +1094,14 @@ static void bnx2_check_link ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 	struct bnx2_status_block *status_blk = bnx2->status_blk;
 	uint32_t status_idx = status_blk->status_idx;
-	uint32_t new_link = ( bnx2->status_blk->status_attn_bits &
-			      STATUS_ATTN_BITS_LINK_STATE );
-	uint32_t old_link = ( bnx2->status_blk->status_attn_bits_ack &
-			      STATUS_ATTN_BITS_LINK_STATE );
-	if ( new_link != old_link ) {
+	uint32_t status_bits = status_blk->status_attn_bits;
+	uint32_t new_link = ( status_bits & STATUS_ATTN_BITS_LINK_STATE );
+
+	/* ACK link state interrupt */
+	status_blk->status_attn_bits_ack = status_bits &
+	                                   STATUS_ATTN_BITS_LINK_STATE;
+
+	if ( new_link != bnx2->old_link ) {
 		if ( new_link ) {
 			bnx2_set_link ( bnx2 );
 			writel ( STATUS_ATTN_BITS_LINK_STATE,
@@ -1119,6 +1122,8 @@ static void bnx2_check_link ( struct net_device *netdev ) {
 		writel ( ( bnx2->hc_cmd | BNX2_HC_COMMAND_COAL_NOW_WO_INT ),
 			 bnx2->regs + BNX2_HC_COMMAND );
 		readl ( bnx2->regs + BNX2_HC_COMMAND );
+
+		bnx2->old_link = new_link;
 	}
 }
 
@@ -1184,6 +1189,8 @@ static int bnx2_open ( struct net_device *netdev ) {
 	bnx2->rx_ring.cons = 0;
 	bnx2->rx_ring.prod = 0;
 	bnx2->rx_ring.prod_bseq = 0;
+
+	bnx2->old_link = 0;
 
 	if ( ( rc = bnx2_init_nic ( bnx2 ) ) )
 		goto err_init;
@@ -1277,6 +1284,8 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 	if ( ( hw_cons & MAX_RX_DESC_CNT ) == MAX_RX_DESC_CNT )
 		hw_cons++;
 
+	DBGC ( bnx2, "hw_cons: %d\n", hw_cons );
+
 	while ( rxr->cons != hw_cons ) {
 		rx_idx = ( rxr->cons % RX_DESC_CNT );
 
@@ -1295,6 +1304,7 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 
 		iob_put ( iobuf, length );
 		if ( hdr->errors ) {
+			DBGC ( bnx2, "BNX2 %p RX error: %02x\n", bnx2, hdr->errors );
 			netdev_rx_err ( netdev, iobuf, -EIO );
 		} else {
 			netdev_rx ( netdev, iobuf );
@@ -1311,6 +1321,9 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
  */
 static void bnx2_poll ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
+	uint32_t attention = bnx2->status_blk->status_attn_bits;
+
+	DBGC ( bnx2, "attn: %04x\n", attention );
 
 	bnx2_poll_tx ( netdev );
 	bnx2_poll_rx ( netdev );
