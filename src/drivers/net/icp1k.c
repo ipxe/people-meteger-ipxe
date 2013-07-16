@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2012 Michael Brown <mbrown@fensystems.co.uk>.
+ * Copyright (C) 2013 Thomas Miletich <thomas.miletich@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -56,7 +57,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 static int icp1k_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 	struct icp1k_nic *icp =
 		container_of ( mii, struct icp1k_nic, mii );
-
+return 0;
 	DBGC ( icp, "SKELETON %p does not yet support MII read\n", icp );
 	( void ) reg;
 	return -ENOTSUP;
@@ -74,7 +75,7 @@ static int icp1k_mii_write ( struct mii_interface *mii, unsigned int reg,
 				unsigned int data) {
 	struct icp1k_nic *icp =
 		container_of ( mii, struct icp1k_nic, mii );
-
+return 0;
 	DBGC ( icp, "SKELETON %p does not yet support MII write\n", icp );
 	( void ) reg;
 	( void ) data;
@@ -152,9 +153,19 @@ static int icp1k_reset ( struct icp1k_nic *icp ) {
  */
 static void icp1k_check_link ( struct net_device *netdev ) {
 	struct icp1k_nic *icp = netdev->priv;
+	uint8_t phy_ctrl;
 
-	DBGC ( icp, "SKELETON %p does not yet support link state\n", icp );
-	netdev_link_err ( netdev, -ENOTSUP );
+	/* Read PHY Control register */
+	phy_ctrl = readb ( icp->regs + ICP1K_PHY_CTRL );
+
+	/* Check link state */
+	if ( ( phy_ctrl & ICP1K_PHY_LINKSPEED_MSK ) == 0 ) {
+		DBGC ( icp, "ICP1K %p Link down\n", icp );
+		netdev_link_down ( netdev );
+	} else {
+		DBGC ( icp, "ICP1K %p Link up\n", icp );
+		netdev_link_up ( netdev );
+	}
 }
 
 /******************************************************************************
@@ -165,6 +176,55 @@ static void icp1k_check_link ( struct net_device *netdev ) {
  */
 
 /**
+ * Initialise descriptor ring
+ *
+ * @v ring		Descriptor ring
+ * @v count		Number of descriptors
+ * @v reg		Register of ring base
+ */
+static void icp1k_init_ring ( struct icp1k_ring *ring, unsigned int count,
+                              unsigned int reg ) {
+	ring->reg = reg;
+	ring->count = count;
+	ring->size = ( count * sizeof ( struct icp1k_desc ) );
+}
+
+static int icp1k_create_ring ( struct icp1k_nic *icp, struct icp1k_ring *ring ) {
+	unsigned int i;
+	uint64_t addr;
+	struct icp1k_desc *desc;
+
+	/* Alocate ring */
+	ring->desc = malloc_dma ( ring->size, ICP1K_DMA_ALIGN );
+
+	if ( ! ring->desc )
+		return -ENOMEM;
+
+	memset ( ring->desc, 0, ring->size );
+
+	/* Initialise all the descriptors */
+	for (i = 0; i < ring->count; i++ ) {
+		struct icp1k_desc *next;
+
+		desc = &ring->desc[i];
+		next = &ring->desc[i % ring->count];
+
+		desc->next = cpu_to_le64 ( virt_to_bus ( next ) );
+///		desc->status = 0ULL;
+		desc->status = ICP1K_TX_DESC_DONE;
+		desc->data = 0ULL;
+	}
+
+	addr = cpu_to_le64 ( virt_to_bus ( ring->desc ) );
+
+	/* Write ring address to card */
+	writel ( 0, ring->reg + icp->regs + ICP1K_REG_HI );
+///	writel ( addr, ring->reg + icp->regs + ICP1K_REG_LO );
+
+	return 0;
+}
+
+/**
  * Open network device
  *
  * @v netdev		Network device
@@ -172,9 +232,18 @@ static void icp1k_check_link ( struct net_device *netdev ) {
  */
 static int icp1k_open ( struct net_device *netdev ) {
 	struct icp1k_nic *icp = netdev->priv;
+	int rc;
+
+	/* Enable interrupt notofications */
+	writew ( ICP1K_INT_LINK_EVENT, icp->regs + ICP1K_INT_ENABLE );
+
+	/* Create transmit descriptor ring */
+	rc = icp1k_create_ring ( icp, &icp->tx );
+	if ( ! rc )
+		return rc;
 
 	DBGC ( icp, "SKELETON %p does not yet support open\n", icp );
-	return -ENOTSUP;
+	return 0;
 }
 
 /**
@@ -198,10 +267,26 @@ static void icp1k_close ( struct net_device *netdev ) {
 static int icp1k_transmit ( struct net_device *netdev,
 			       struct io_buffer *iobuf ) {
 	struct icp1k_nic *icp = netdev->priv;
+	struct icp1k_ring *ring = &icp->tx;
+	struct icp1k_desc *desc;
+	uint64_t tmp;
+	int tx_idx = ( ring->prod++ % ICP1K_NUM_TX_DESC );
 
-	DBGC ( icp, "SKELETON %p does not yet support transmit\n", icp );
-	( void ) iobuf;
-	return -ENOTSUP;
+	desc = &ring->desc[tx_idx];
+
+	DBGC2 ( icp, "ICP1K %p transmitting iobuf %p tx_idx %d\n", icp, iobuf,
+	        tx_idx );
+
+	/* Fill transmit descriptor */
+	tmp = ( (unsigned long long) virt_to_bus ( iobuf->data ) | ( (unsigned long long) iob_len ( iobuf ) << 48 ) );
+	desc->data = cpu_to_le64 ( tmp );
+	desc->status = ICP1K_TX_DESC_INTR | ICP1K_DESC_1FRAG;
+
+	/* Trigger transmit */
+	tmp = cpu_to_le64 ( virt_to_bus ( desc ) );
+	writel ( tmp, icp->regs + ICP1K_TX_RING );
+
+	return 0;
 }
 
 /**
@@ -211,6 +296,17 @@ static int icp1k_transmit ( struct net_device *netdev,
  */
 static void icp1k_poll ( struct net_device *netdev ) {
 	struct icp1k_nic *icp = netdev->priv;
+	uint16_t int_status;
+
+	/* Reading from Status/Ack register ACKS the interrupt and disables it
+	 * in ICP1K_INT_ENABLE
+	 */
+	int_status = readw ( icp->regs + ICP1K_INT_STATUS_ACK );
+///	DBGC ( icp, "ICP %p interrupt status %04x\n", icp, int_status );
+
+	/* Handle link state change */
+	if ( int_status & ICP1K_INT_LINK_EVENT )
+		icp1k_check_link ( netdev );
 
 	/* Not yet implemented */
 	( void ) icp;
@@ -286,6 +382,12 @@ static int icp1k_probe ( struct pci_device *pci ) {
 		goto err_mii_reset;
 	}
 
+	/* Initialise descriptor rings */
+	icp1k_init_ring ( &icp->tx, ICP1K_NUM_TX_DESC, ICP1K_TX_RING );
+	icp1k_init_ring ( &icp->rx, ICP1K_NUM_RX_DESC, 0 );
+
+	netdev->hw_addr[0] = 0x70;
+
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
@@ -330,7 +432,7 @@ static void icp1k_remove ( struct pci_device *pci ) {
 
 /** IC+ 1000 PCI device IDs */
 static struct pci_device_id icp1k_nics[] = {
-	PCI_ROM ( 0x5ce1, 0x5ce1, "icp",	"IC+1000", 0 ),
+	PCI_ROM ( 0x13f0, 0x1023, "icp",	"IC+1000", 0 ),
 };
 
 /** IC+ 1000 PCI driver */
